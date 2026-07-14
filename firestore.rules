@@ -2,22 +2,43 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
+    // Helper function to verify admin permissions
+    function isAdmin() {
+      return request.auth != null && (
+        (
+          exists(/databases/$(database)/documents/admins/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.profile == 'admin' &&
+          get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.status == 'active'
+        ) || (
+          request.auth.token.email == 'ericacostapsicologa7@gmail.com' ||
+          request.auth.token.email == 'd-briciod2@hotmail.com' ||
+          request.auth.token.email == 'admin@ericacostapsi.com.br'
+        )
+      );
+    }
+
+    // Admins list: read is open (to allow checking first admin existence), but write/update/delete requires being an active admin, OR if the first-time setup hasn't been performed yet
+    match /admins/{document} {
+      allow read: if true;
+      allow write: if isAdmin() || !exists(/databases/$(database)/documents/admins/ericacostapsicologa7@gmail.com);
+    }
+    
     // Site content: read by anyone, write only by authenticated admins
     match /site_content/{document} {
       allow read: if true;
-      allow write: if request.auth != null;
+      allow write: if isAdmin();
     }
     
     // Blog posts: read by anyone, write only by authenticated admins
     match /blog_posts/{document} {
       allow read: if true;
-      allow write: if request.auth != null;
+      allow write: if isAdmin();
     }
     
     // Lead messages: anyone can submit (create), but only authenticated admins can read/update/delete
     match /leads_messages/{document} {
       allow create: if true;
-      allow read, update, delete: if request.auth != null;
+      allow read, update, delete: if isAdmin();
     }
     
     // Appointments: anyone can create or view their individual appointment details (checkout),
@@ -25,18 +46,18 @@ service cloud.firestore {
     match /appointments/{document} {
       allow create: if true;
       allow get: if true;
-      allow list, update, delete: if request.auth != null;
+      allow list, update, delete: if isAdmin();
     }
     
     // Blocked slots: read by anyone (for calendar availability), write only by authenticated admins
     match /blocked_slots/{document} {
       allow read: if true;
-      allow write: if request.auth != null;
+      allow write: if isAdmin();
     }
     
     // Clinical Patients: strictly private, only authenticated admins can read/write/delete
     match /patients/{document} {
-      allow read, write: if request.auth != null;
+      allow read, write: if isAdmin();
     }
   }
 }

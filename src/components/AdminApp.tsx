@@ -9,12 +9,22 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useSiteContent } from '../context/SiteContext';
 import { contentService } from '../services/contentService';
 import { ContactMessage, Appointment, Service, BlogPost, FAQ, Patient } from '../types';
-import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
-import { auth } from '../firebase';
+import { 
+  signInWithEmailAndPassword, 
+  signInWithPopup, 
+  GoogleAuthProvider,
+  sendPasswordResetEmail,
+  updatePassword,
+  updateEmail,
+  updateProfile
+} from 'firebase/auth';
+import { doc, getDoc, setDoc, updateDoc, collection, getDocs, deleteDoc } from 'firebase/firestore';
+import { auth, db } from '../firebase';
 
 const ADMIN_EMAILS = [
   'd-briciod2@hotmail.com',
-  'admin@ericacostapsi.com.br'
+  'admin@ericacostapsi.com.br',
+  'ericacostapsicologa7@gmail.com'
 ];
 
 interface AdminAppProps {
@@ -25,7 +35,7 @@ export default function AdminApp({ navigate }: AdminAppProps) {
   const { siteContent, blogPosts, user, loading: contextLoading, refreshContent, refreshBlog, logout, updateSiteContent, updateBlogPosts } = useSiteContent();
 
   const [activeTab, setActiveTab] = useState<
-    'dashboard' | 'perfil' | 'fotos' | 'agenda' | 'pacientes' | 'mensagens' | 'blog' | 'pagamentos' | 'configuracoes'
+    'dashboard' | 'perfil' | 'fotos' | 'agenda' | 'pacientes' | 'mensagens' | 'blog' | 'pagamentos' | 'configuracoes' | 'minhaconta'
   >('dashboard');
 
   const handleTabClick = (tabId: string) => {
@@ -37,7 +47,7 @@ export default function AdminApp({ navigate }: AdminAppProps) {
       const path = window.location.pathname;
       if (path.startsWith('/admin/')) {
         const subPath = path.substring(7); // '/admin/' has 7 characters
-        const validTabs = ['dashboard', 'perfil', 'fotos', 'agenda', 'pacientes', 'mensagens', 'blog', 'pagamentos', 'configuracoes'];
+        const validTabs = ['dashboard', 'perfil', 'fotos', 'agenda', 'pacientes', 'mensagens', 'blog', 'pagamentos', 'configuracoes', 'minhaconta'];
         if (validTabs.includes(subPath)) {
           setActiveTab(subPath as any);
         }
@@ -55,6 +65,37 @@ export default function AdminApp({ navigate }: AdminAppProps) {
       window.removeEventListener('navigate', handlePathToTab);
     };
   }, []);
+
+  // Admin Verification States
+  const [dbAdminDoc, setDbAdminDoc] = useState<any>(null);
+  const [isAdminChecking, setIsAdminChecking] = useState(true);
+
+  // Auto setup states
+  const [setupStatus, setSetupStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [setupMessage, setSetupMessage] = useState('');
+
+  // Password reset on login
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetMessage, setResetMessage] = useState('');
+  const [resetError, setResetError] = useState('');
+
+  // Account modification states
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [newEmail, setNewEmail] = useState('');
+  const [accountError, setAccountError] = useState('');
+  const [accountSuccess, setAccountSuccess] = useState('');
+  const [accountLoading, setAccountLoading] = useState(false);
+
+  // New Admin creation states
+  const [newAdminEmail, setNewAdminEmail] = useState('');
+  const [newAdminName, setNewAdminName] = useState('');
+  const [registerSuccess, setRegisterSuccess] = useState('');
+  const [registerError, setRegisterError] = useState('');
+  const [registerLoading, setRegisterLoading] = useState(false);
+  const [adminList, setAdminList] = useState<any[]>([]);
+  const [firstAdminExists, setFirstAdminExists] = useState<boolean | null>(null);
 
   // Authentication State
   const [emailInput, setEmailInput] = useState('');
@@ -128,7 +169,198 @@ export default function AdminApp({ navigate }: AdminAppProps) {
   const [agendaViewMode, setAgendaViewMode] = useState<'weekly' | 'timeline'>('weekly');
 
   const isDevelopment = window.location.hostname === 'localhost' || window.location.hostname.includes('aistudio') || window.location.hostname.includes('run.app');
-  const isAdmin = user && (ADMIN_EMAILS.includes(user.email || '') || isDevelopment);
+  const isAdmin = user && (dbAdminDoc?.profile === 'admin' && dbAdminDoc?.status === 'active');
+
+  useEffect(() => {
+    const verifyAdmin = async () => {
+      if (!user) {
+        setDbAdminDoc(null);
+        setIsAdminChecking(false);
+        return;
+      }
+      setIsAdminChecking(true);
+      try {
+        const docRef = doc(db, 'admins', user.uid);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data && data.profile === 'admin' && data.status === 'active') {
+            setDbAdminDoc(data);
+          } else {
+            setDbAdminDoc(null);
+          }
+        } else {
+          // Fallback to query the admins collection by email
+          const emailDocRef = doc(db, 'admins', user.email || '');
+          const emailSnap = await getDoc(emailDocRef);
+          if (emailSnap.exists()) {
+            const data = emailSnap.data();
+            if (data && data.profile === 'admin' && data.status === 'active') {
+              setDbAdminDoc(data);
+              // Migrate to UID document
+              try {
+                await setDoc(doc(db, 'admins', user.uid), {
+                  ...data,
+                  uid: user.uid
+                });
+              } catch (e) {
+                console.error("Erro ao migrar admin para UID:", e);
+              }
+            } else {
+              setDbAdminDoc(null);
+            }
+          } else {
+            // Fallback for ADMIN_EMAILS
+            if (ADMIN_EMAILS.includes(user.email || '')) {
+              setDbAdminDoc({
+                uid: user.uid,
+                email: user.email,
+                name: user.email === 'ericacostapsicologa7@gmail.com' ? 'Erica Costa' : 'Administrador',
+                profile: 'admin',
+                status: 'active'
+              });
+            } else {
+              setDbAdminDoc(null);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Erro ao verificar admin no Firestore:", err);
+        if (ADMIN_EMAILS.includes(user.email || '')) {
+          setDbAdminDoc({
+            uid: user.uid,
+            email: user.email,
+            name: user.email === 'ericacostapsicologa7@gmail.com' ? 'Erica Costa' : 'Administrador',
+            profile: 'admin',
+            status: 'active'
+          });
+        } else {
+          setDbAdminDoc(null);
+        }
+      } finally {
+        setIsAdminChecking(false);
+      }
+    };
+
+    verifyAdmin();
+  }, [user]);
+
+  // Check if first admin exists to hide/show setup option on login page
+  useEffect(() => {
+    const checkIfAdminExists = async () => {
+      try {
+        const docRef = doc(db, 'admins', 'ericacostapsicologa7@gmail.com');
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          setFirstAdminExists(true);
+        } else {
+          setFirstAdminExists(false);
+        }
+      } catch (err) {
+        console.error("Erro ao verificar primeiro administrador:", err);
+        // Em caso de erro, assume true por segurança em produção para ocultar configuração
+        setFirstAdminExists(true);
+      }
+    };
+    checkIfAdminExists();
+  }, []);
+
+  // Load admins list when 'minhaconta' is active
+  useEffect(() => {
+    if (activeTab === 'minhaconta' && user) {
+      loadAdminsList();
+    }
+  }, [activeTab, user]);
+
+  const loadAdminsList = async () => {
+    try {
+      const querySnapshot = await getDocs(collection(db, 'admins'));
+      const list: any[] = [];
+      querySnapshot.forEach((doc) => {
+        list.push({ id: doc.id, ...doc.data() });
+      });
+      // Filtrar duplicados (se houver documento por email e uid)
+      const uniqueAdminsMap = new Map();
+      list.forEach(adm => {
+        const email = adm.email?.toLowerCase();
+        if (email) {
+          if (!uniqueAdminsMap.has(email) || adm.uid) {
+            uniqueAdminsMap.set(email, adm);
+          }
+        }
+      });
+      setAdminList(Array.from(uniqueAdminsMap.values()));
+    } catch (err) {
+      console.error("Erro ao carregar lista de administradores:", err);
+    }
+  };
+
+  const handleRegisterAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRegisterError('');
+    setRegisterSuccess('');
+    if (!newAdminEmail || !newAdminName) {
+      setRegisterError('Por favor, informe o nome e o e-mail do novo administrador.');
+      return;
+    }
+    setRegisterLoading(true);
+    try {
+      const emailLower = newAdminEmail.toLowerCase();
+      
+      const adminDocRef = doc(db, 'admins', emailLower);
+      await setDoc(adminDocRef, {
+        email: emailLower,
+        name: newAdminName,
+        profile: 'admin',
+        status: 'active',
+        createdAt: new Date().toISOString()
+      });
+
+      setRegisterSuccess(`Administrador(a) ${newAdminName} pré-cadastrado(a) com sucesso! Acesso concedido.`);
+      setNewAdminEmail('');
+      setNewAdminName('');
+      await loadAdminsList();
+    } catch (err: any) {
+      console.error(err);
+      setRegisterError(`Erro ao cadastrar administrador: ${err.message || err}`);
+    } finally {
+      setRegisterLoading(false);
+    }
+  };
+
+  const handleDeleteAdmin = async (adminDocId: string, email: string) => {
+    if (!window.confirm(`Tem certeza de que deseja remover o acesso administrativo de ${email}?`)) {
+      return;
+    }
+    try {
+      setRegisterError('');
+      setRegisterSuccess('');
+      
+      if (email.toLowerCase() === user?.email?.toLowerCase()) {
+        setRegisterError('Você não pode remover o seu próprio acesso administrativo.');
+        return;
+      }
+      
+      if (email.toLowerCase() === 'ericacostapsicologa7@gmail.com') {
+        setRegisterError('O acesso da Dra. Erica Costa não pode ser removido.');
+        return;
+      }
+
+      await deleteDoc(doc(db, 'admins', adminDocId));
+      
+      if (adminDocId !== email.toLowerCase()) {
+        try {
+          await deleteDoc(doc(db, 'admins', email.toLowerCase()));
+        } catch (e) {}
+      }
+      
+      setRegisterSuccess(`Acesso administrativo de ${email} removido com sucesso.`);
+      await loadAdminsList();
+    } catch (err: any) {
+      console.error(err);
+      setRegisterError(`Erro ao remover administrador: ${err.message || err}`);
+    }
+  };
 
   // Load Admin Data
   const loadAdminData = async () => {
@@ -184,6 +416,243 @@ export default function AdminApp({ navigate }: AdminAppProps) {
   }, [siteContent, activeTab]);
 
   // --- Handlers ---
+
+  // Automated first-time admin setup
+  const setupFirstAdmin = async () => {
+    setSetupStatus('loading');
+    setSetupMessage('Iniciando criação da conta administrativa...');
+    try {
+      const adminEmail = "ericacostapsicologa7@gmail.com";
+      const adminPassword = "34932509Erica";
+      const adminName = "Erica Costa";
+      
+      const apiKey = auth.app.options.apiKey;
+      if (!apiKey) {
+        throw new Error("Chave de API do Firebase não configurada.");
+      }
+
+      const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: adminEmail,
+          password: adminPassword,
+          returnSecureToken: true
+        })
+      });
+
+      let uid = "";
+      if (response.ok) {
+        const data = await response.json();
+        uid = data.localId;
+        setSetupMessage('Usuário criado no Firebase Authentication!');
+      } else {
+        const errData = await response.json();
+        if (errData.error && errData.error.message === "EMAIL_EXISTS") {
+          const signInResponse = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: adminEmail,
+              password: adminPassword,
+              returnSecureToken: true
+            })
+          });
+          if (signInResponse.ok) {
+            const signInData = await signInResponse.json();
+            uid = signInData.localId;
+            setSetupMessage('Usuário já existe. Vinculando documento no Firestore...');
+          } else {
+            const signInErr = await signInResponse.json();
+            if (signInErr.error && signInErr.error.message === "INVALID_LOGIN_CREDENTIALS") {
+              setSetupStatus('error');
+              setSetupMessage('O usuário já existe com outra senha. Por favor, tente redefinir sua senha.');
+              return;
+            } else {
+              setSetupStatus('error');
+              setSetupMessage(`Erro ao validar conta: ${signInErr.error?.message || 'Erro desconhecido'}`);
+              return;
+            }
+          }
+        } else if (errData.error && errData.error.message === "OPERATION_NOT_ALLOWED") {
+          setSetupStatus('error');
+          setSetupMessage('O login por E-mail/Senha está desativado no Console Firebase. Ative em "Authentication > Sign-in method" para continuar.');
+          return;
+        } else {
+          setSetupStatus('error');
+          setSetupMessage(`Erro ao criar conta: ${errData.error?.message || 'Erro desconhecido'}`);
+          return;
+        }
+      }
+
+      if (uid) {
+        const adminDocRef = doc(db, "admins", uid);
+        await setDoc(adminDocRef, {
+          uid: uid,
+          name: adminName,
+          email: adminEmail,
+          profile: "admin",
+          createdAt: new Date().toISOString(),
+          status: "active",
+          firstAccess: true
+        });
+
+        const emailDocRef = doc(db, "admins", adminEmail);
+        await setDoc(emailDocRef, {
+          uid: uid,
+          name: adminName,
+          email: adminEmail,
+          profile: "admin",
+          createdAt: new Date().toISOString(),
+          status: "active",
+          firstAccess: true
+        });
+
+        setSetupStatus('success');
+        setSetupMessage('Conta de Erica Costa configurada com sucesso!');
+        setDbAdminDoc({
+          uid: uid,
+          name: adminName,
+          email: adminEmail,
+          profile: "admin",
+          createdAt: new Date().toISOString(),
+          status: "active",
+          firstAccess: true
+        });
+      }
+    } catch (err: any) {
+      console.error(err);
+      setSetupStatus('error');
+      setSetupMessage(`Erro ao configurar admin: ${err.message || err}`);
+    }
+  };
+
+  const handleForgotPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetMessage('');
+    setResetError('');
+    if (!resetEmail) {
+      setResetError('Por favor, informe seu e-mail.');
+      return;
+    }
+    try {
+      await sendPasswordResetEmail(auth, resetEmail);
+      setResetMessage('E-mail de recuperação de senha enviado com sucesso! Verifique sua caixa de entrada.');
+    } catch (err: any) {
+      console.error(err);
+      setResetError('Erro ao enviar e-mail de recuperação. Verifique se o e-mail está cadastrado.');
+    }
+  };
+
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAccountError('');
+    setAccountSuccess('');
+    if (newPassword !== confirmNewPassword) {
+      setAccountError('As senhas digitadas não coincidem.');
+      return;
+    }
+    if (newPassword.length < 6) {
+      setAccountError('A senha deve ter pelo menos 6 caracteres.');
+      return;
+    }
+    setAccountLoading(true);
+    try {
+      await updatePassword(auth.currentUser!, newPassword);
+      
+      if (dbAdminDoc?.firstAccess) {
+        await updateDoc(doc(db, 'admins', user!.uid), { firstAccess: false });
+        try {
+          await updateDoc(doc(db, 'admins', user!.email || ''), { firstAccess: false });
+        } catch (e) {}
+        setDbAdminDoc(prev => ({ ...prev, firstAccess: false }));
+      }
+      
+      setAccountSuccess('Senha alterada com sucesso!');
+      setNewPassword('');
+      setConfirmNewPassword('');
+    } catch (err: any) {
+      console.error(err);
+      if (err.code === 'auth/requires-recent-login') {
+        setAccountError('Por motivos de segurança, alteração de senha exige um login recente. Por favor, faça logout e login novamente para trocar a senha.');
+      } else {
+        setAccountError(`Erro ao alterar senha: ${err.message}`);
+      }
+    } finally {
+      setAccountLoading(false);
+    }
+  };
+
+  const handleUpdateEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAccountError('');
+    setAccountSuccess('');
+    if (!newEmail) {
+      setAccountError('Por favor, digite o novo e-mail.');
+      return;
+    }
+    setAccountLoading(true);
+    try {
+      const oldEmail = user!.email || '';
+      await updateEmail(auth.currentUser!, newEmail);
+      
+      await updateDoc(doc(db, 'admins', user!.uid), { email: newEmail });
+      try {
+        await updateDoc(doc(db, 'admins', oldEmail), { email: newEmail });
+      } catch (e) {}
+      
+      setDbAdminDoc(prev => ({ ...prev, email: newEmail }));
+      setAccountSuccess('E-mail atualizado com sucesso!');
+      setNewEmail('');
+    } catch (err: any) {
+      console.error(err);
+      if (err.code === 'auth/requires-recent-login') {
+        setAccountError('Por segurança, esta operação exige que você faça login novamente antes de trocar o e-mail.');
+      } else {
+        setAccountError(`Erro ao alterar e-mail: ${err.message}`);
+      }
+    } finally {
+      setAccountLoading(false);
+    }
+  };
+
+  const handleSendResetEmail = async () => {
+    setAccountError('');
+    setAccountSuccess('');
+    setAccountLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, user!.email!);
+      setAccountSuccess('E-mail de recuperação de senha enviado com sucesso!');
+    } catch (err: any) {
+      console.error(err);
+      setAccountError(`Erro ao enviar e-mail: ${err.message}`);
+    } finally {
+      setAccountLoading(false);
+    }
+  };
+
+  const handleUpdateProfilePhoto = async (file: File) => {
+    setAccountError('');
+    setAccountSuccess('');
+    setAccountLoading(true);
+    try {
+      const url = await contentService.uploadImage(file, 'admins');
+      await updateProfile(auth.currentUser!, { photoURL: url });
+      
+      await updateDoc(doc(db, 'admins', user!.uid), { photoURL: url });
+      try {
+        await updateDoc(doc(db, 'admins', user!.email || ''), { photoURL: url });
+      } catch (e) {}
+      
+      setDbAdminDoc(prev => ({ ...prev, photoURL: url }));
+      setAccountSuccess('Foto de perfil atualizada com sucesso!');
+    } catch (err: any) {
+      console.error(err);
+      setAccountError(`Erro ao atualizar foto: ${err.message}`);
+    } finally {
+      setAccountLoading(false);
+    }
+  };
 
   // Authentication Handlers
   const handleEmailLogin = async (e: React.FormEvent) => {
@@ -539,63 +1008,161 @@ export default function AdminApp({ navigate }: AdminAppProps) {
             </div>
           )}
 
-          {isDevelopment && (
-            <div className="p-3 bg-amber-50 text-amber-900 border border-amber-100 rounded-xl text-[11px] leading-relaxed">
-              <strong>Ambiente de Desenvolvimento:</strong> Qualquer login do Google ou conta de teste é permitida para propósitos de visualização.
+          {/* FORGOT PASSWORD FORM */}
+          {showForgotPassword ? (
+            <div className="space-y-4">
+              <div className="p-4 bg-softblue-50/50 text-softblue-900 rounded-2xl border border-softblue-100 text-xs leading-relaxed">
+                Insira o e-mail cadastrado e enviaremos um link de recuperação oficial do Firebase Authentication para redefinir sua senha de forma segura.
+              </div>
+
+              {resetMessage && (
+                <div className="p-3 bg-emerald-50 text-emerald-800 rounded-xl border border-emerald-100 text-xs flex gap-2 items-center leading-relaxed">
+                  <CheckCircle2 size={16} className="shrink-0" />
+                  <span>{resetMessage}</span>
+                </div>
+              )}
+
+              {resetError && (
+                <div className="p-3 bg-rose-50 text-rose-800 rounded-xl border border-rose-100 text-xs flex gap-2 items-center leading-relaxed">
+                  <AlertCircle size={16} className="shrink-0" />
+                  <span>{resetError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleForgotPasswordSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">E-mail de Recuperação</label>
+                  <input
+                    type="email"
+                    required
+                    value={resetEmail}
+                    onChange={(e) => setResetEmail(e.target.value)}
+                    placeholder="seu-email@gmail.com"
+                    className="w-full px-4 py-2.5 rounded-xl border border-sand-200 focus:outline-none text-xs focus:border-sage-500 bg-sand-50/20"
+                  />
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowForgotPassword(false);
+                      setResetMessage('');
+                      setResetError('');
+                    }}
+                    className="w-1/2 py-2.5 border border-sand-300 hover:bg-sand-50 text-sand-800 rounded-xl text-xs font-bold uppercase cursor-pointer text-center transition-colors"
+                  >
+                    Voltar
+                  </button>
+                  <button
+                    type="submit"
+                    className="w-1/2 py-2.5 bg-sage-700 hover:bg-sage-800 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer text-center"
+                  >
+                    Enviar Link
+                  </button>
+                </div>
+              </form>
             </div>
+          ) : (
+            /* STANDARD EMAIL LOGIN FORM */
+            <form onSubmit={handleEmailLogin} className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">E-mail Administrativo</label>
+                <input
+                  type="email"
+                  required
+                  value={emailInput}
+                  onChange={(e) => setEmailInput(e.target.value)}
+                  placeholder="exemplo@ericacostapsi.com.br"
+                  className="w-full px-4 py-2.5 rounded-xl border border-sand-200 focus:outline-none text-xs focus:border-sage-500 bg-sand-50/20"
+                />
+              </div>
+
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono">Senha de Segurança</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResetEmail(emailInput);
+                      setShowForgotPassword(true);
+                    }}
+                    className="text-[10px] font-bold text-softblue-600 hover:text-softblue-800 cursor-pointer"
+                  >
+                    Esqueci minha senha?
+                  </button>
+                </div>
+                <input
+                  type="password"
+                  required
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full px-4 py-2.5 rounded-xl border border-sand-200 focus:outline-none text-xs focus:border-sage-500 bg-sand-50/20"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full py-3 bg-sage-700 hover:bg-sage-800 disabled:bg-sage-400 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-md cursor-pointer transition-colors"
+              >
+                {authLoading ? <RefreshCw className="animate-spin" size={14} /> : <Lock size={14} />}
+                <span>Entrar</span>
+              </button>
+            </form>
           )}
 
-          <form onSubmit={handleEmailLogin} className="space-y-4">
-            <div>
-              <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">E-mail Administrativo</label>
-              <input
-                type="email"
-                required
-                value={emailInput}
-                onChange={(e) => setEmailInput(e.target.value)}
-                placeholder="exemplo@ericacostapsi.com.br"
-                className="w-full px-4 py-2.5 rounded-xl border border-sand-200 focus:outline-none text-xs focus:border-sage-500 bg-sand-50/20"
-              />
+          {/* DYNAMIC FIRST ACCESS INITIALIZER / AUTOMATED PROVISIONING */}
+          {firstAdminExists === false && (
+            <div className="pt-2 border-t border-sand-100">
+              <details className="group">
+                <summary className="list-none flex items-center justify-between cursor-pointer py-1.5 text-[11px] font-bold text-sand-600 hover:text-sand-800 transition-colors">
+                  <span>Configuração de Primeiro Acesso (Dra. Erica)</span>
+                  <span className="transition-transform group-open:rotate-180">▼</span>
+                </summary>
+                <div className="pt-3 space-y-3">
+                  <p className="text-[11px] text-sand-600 leading-relaxed">
+                    Para criar e autorizar a conta da administradora <strong>Erica Costa</strong> no Firebase de forma automática, clique no botão abaixo.
+                  </p>
+                  
+                  {setupStatus === 'loading' && (
+                    <div className="p-3 bg-sand-50 text-sand-700 rounded-xl border border-sand-200 text-[10px] flex gap-2 items-center animate-pulse">
+                      <RefreshCw className="animate-spin shrink-0" size={12} />
+                      <span>{setupMessage}</span>
+                    </div>
+                  )}
+
+                  {setupStatus === 'success' && (
+                    <div className="p-3 bg-emerald-50 text-emerald-800 rounded-xl border border-emerald-100 text-[10px] flex gap-2 items-center">
+                      <CheckCircle2 className="text-emerald-600 shrink-0" size={12} />
+                      <span>{setupMessage}</span>
+                    </div>
+                  )}
+
+                  {setupStatus === 'error' && (
+                    <div className="p-3.5 bg-rose-50 text-rose-800 rounded-xl border border-rose-100 text-[10px] leading-relaxed space-y-2">
+                      <p className="font-bold flex gap-1.5 items-center">
+                        <AlertCircle className="text-rose-600 shrink-0" size={12} />
+                        <span>Erro de Configuração</span>
+                      </p>
+                      <p>{setupMessage}</p>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={setupStatus === 'loading'}
+                    onClick={setupFirstAdmin}
+                    className="w-full py-2 bg-sand-950 hover:bg-sand-900 disabled:bg-sand-400 text-white rounded-xl text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                  >
+                    <Sparkles size={11} />
+                    <span>Configurar Conta (Erica Costa)</span>
+                  </button>
+                </div>
+              </details>
             </div>
-
-            <div>
-              <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Senha de Segurança</label>
-              <input
-                type="password"
-                required
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-                placeholder="••••••••"
-                className="w-full px-4 py-2.5 rounded-xl border border-sand-200 focus:outline-none text-xs focus:border-sage-500 bg-sand-50/20"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={authLoading}
-              className="w-full py-3 bg-sage-700 hover:bg-sage-800 disabled:bg-sage-400 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-md cursor-pointer transition-colors"
-            >
-              {authLoading ? <RefreshCw className="animate-spin" size={14} /> : <Lock size={14} />}
-              <span>Autenticar com E-mail</span>
-            </button>
-          </form>
-
-          <div className="relative flex py-2 items-center">
-            <div className="flex-grow border-t border-sand-200"></div>
-            <span className="flex-shrink mx-4 text-[10px] font-bold text-sand-400 uppercase font-mono">Ou</span>
-            <div className="flex-grow border-t border-sand-200"></div>
-          </div>
-
-          <button
-            onClick={handleGoogleLogin}
-            disabled={authLoading}
-            className="w-full py-2.5 border border-sand-300 hover:bg-sand-50 text-sand-800 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow-sm cursor-pointer transition-colors bg-white"
-          >
-            <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
-              <path fill="#EA4335" d="M12.24 10.285V14.4h6.887c-.275 1.565-1.88 4.604-6.887 4.604-4.33 0-7.859-3.578-7.859-8s3.529-8 7.859-8c2.46 0 4.105 1.025 5.047 1.926l3.227-3.11C18.281 1.09 15.542 0 12.24 0 5.582 0 .18 5.4.18 12s5.402 12 12.06 12c6.945 0 11.56-4.887 11.56-11.777 0-.792-.084-1.4-.188-1.938H12.24z"/>
-            </svg>
-            <span>Acessar com Google</span>
-          </button>
+          )}
 
           <button
             onClick={() => navigate('/')}
@@ -700,7 +1267,8 @@ export default function AdminApp({ navigate }: AdminAppProps) {
               { id: 'mensagens', label: 'Caixa de Mensagens', icon: <Inbox size={15} /> },
               { id: 'blog', label: 'Blog & Conteúdo', icon: <BookOpen size={15} /> },
               { id: 'pagamentos', label: 'Pagamentos & Finanças', icon: <CreditCard size={15} /> },
-              { id: 'configuracoes', label: 'Configurações', icon: <Settings size={15} /> }
+              { id: 'configuracoes', label: 'Configurações', icon: <Settings size={15} /> },
+              { id: 'minhaconta', label: 'Minha Conta', icon: <User size={15} /> }
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -813,6 +1381,29 @@ export default function AdminApp({ navigate }: AdminAppProps) {
                   exit={{ opacity: 0 }}
                   className="space-y-6"
                 >
+                  {dbAdminDoc?.firstAccess && (
+                    <div className="p-5 bg-gradient-to-r from-softblue-500 to-sage-600 text-white rounded-3xl shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4 border border-white/10 animate-pulse-slow">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <Sparkles className="text-amber-300 shrink-0" size={20} />
+                          <h3 className="font-serif font-bold text-base animate-pulse">Seja bem-vinda, Dra. Erica Costa!</h3>
+                        </div>
+                        <p className="text-xs text-white/90 leading-relaxed">
+                          Este é o seu primeiro acesso ao painel administrativo. <strong>Por motivos de segurança, a sua senha inicial deve ser alterada</strong> na página "Minha Conta".
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setActiveTab('minhaconta');
+                          handleTabClick('minhaconta');
+                        }}
+                        className="px-4 py-2.5 bg-white text-sand-950 hover:bg-sand-50 rounded-xl text-xs font-bold shadow-sm transition-all shrink-0 cursor-pointer text-center"
+                      >
+                        Ir para Minha Conta
+                      </button>
+                    </div>
+                  )}
+
                   {/* Indicators Grid */}
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                     {[
@@ -2478,6 +3069,331 @@ export default function AdminApp({ navigate }: AdminAppProps) {
                     <div>
                       <p className="text-xs font-bold text-sand-950">Segurança de Prontuários Ativada</p>
                       <p className="text-[10px] text-sand-600 mt-0.5 leading-relaxed">Suas informações clínicas e de pacientes estão criptografadas e protegidas pelas regras rígidas de segurança do Firebase Firestore.</p>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {/* 10. MINHA CONTA */}
+            {activeTab === 'minhaconta' && (
+              <motion.div
+                key="tab-minhaconta"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="max-w-4xl space-y-6"
+              >
+                {/* Header */}
+                <div className="bg-white p-8 rounded-3xl border border-sand-200 shadow-sm">
+                  <h3 className="text-lg font-serif font-bold text-sand-950">Gerenciamento da Conta</h3>
+                  <p className="text-xs text-sand-500 mt-1">
+                    Administre suas credenciais de segurança do Firebase, foto de perfil e status da conta.
+                  </p>
+                </div>
+
+                {/* Main Content Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  
+                  {/* Left Column: Photo & Quick Status */}
+                  <div className="md:col-span-1 space-y-6">
+                    <div className="bg-white p-6 rounded-3xl border border-sand-200 shadow-sm text-center space-y-4">
+                      <div className="relative inline-block group">
+                        <img
+                          src={dbAdminDoc?.photoURL || user?.photoURL || "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?q=80&w=300&auto=format&fit=crop"}
+                          alt="Foto de Perfil"
+                          referrerPolicy="no-referrer"
+                          className="w-24 h-24 rounded-2xl object-cover mx-auto border border-sand-200 bg-sand-50 shadow-sm"
+                        />
+                        <label className="absolute -bottom-1.5 -right-1.5 p-1.5 bg-sage-600 hover:bg-sage-700 text-white rounded-lg shadow-sm cursor-pointer transition-all">
+                          <Upload size={14} />
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                handleUpdateProfilePhoto(file);
+                              }
+                            }}
+                          />
+                        </label>
+                      </div>
+
+                      <div className="space-y-1">
+                        <h4 className="font-serif font-bold text-sm text-sand-950">{dbAdminDoc?.name || user?.displayName || "Erica Costa"}</h4>
+                        <p className="text-[10px] font-mono text-sand-500 uppercase font-semibold">{dbAdminDoc?.profile || 'admin'}</p>
+                      </div>
+
+                      <div className="pt-3 border-t border-sand-100 flex flex-col gap-2">
+                        <div className="flex justify-between text-[11px] text-sand-600">
+                          <span>Status:</span>
+                          <span className="font-bold text-emerald-600 uppercase">Ativo</span>
+                        </div>
+                        <div className="flex justify-between text-[11px] text-sand-600 gap-1.5">
+                          <span className="shrink-0">E-mail:</span>
+                          <span className="font-mono text-[10px] text-sand-700 overflow-hidden text-ellipsis whitespace-nowrap max-w-[120px]" title={dbAdminDoc?.email || user?.email || ''}>{dbAdminDoc?.email || user?.email}</span>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => logout()}
+                        className="w-full py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-100 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-colors cursor-pointer mt-4"
+                      >
+                        <LogOut size={13} />
+                        <span>Encerrar Sessão</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Right Column: Security Forms */}
+                  <div className="md:col-span-2 space-y-6">
+                    {/* Display Alerts */}
+                    {(accountError || accountSuccess) && (
+                      <div className={`p-4 rounded-2xl border text-xs flex gap-2.5 items-center leading-relaxed ${
+                        accountError 
+                          ? 'bg-rose-50 text-rose-800 border-rose-100' 
+                          : 'bg-emerald-50 text-emerald-800 border-emerald-100'
+                      }`}>
+                        {accountError ? <AlertCircle size={18} className="shrink-0 text-rose-600" /> : <CheckCircle2 size={18} className="shrink-0 text-emerald-600" />}
+                        <span>{accountError || accountSuccess}</span>
+                      </div>
+                    )}
+
+                    {/* Change Password Card */}
+                    <div className="bg-white p-6 rounded-3xl border border-sand-200 shadow-sm space-y-4">
+                      <div className="border-b border-sand-100 pb-3">
+                        <h4 className="text-sm font-serif font-bold text-sand-950 flex items-center gap-1.5">
+                          <Lock size={15} className="text-sand-700" />
+                          <span>Alterar Senha de Segurança</span>
+                        </h4>
+                        <p className="text-[10px] text-sand-500 mt-0.5">Defina uma nova senha para acessar o painel.</p>
+                      </div>
+
+                      <form onSubmit={handleUpdatePassword} className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Nova Senha</label>
+                            <input
+                              type="password"
+                              required
+                              value={newPassword}
+                              onChange={(e) => setNewPassword(e.target.value)}
+                              placeholder="Mínimo de 6 caracteres"
+                              className="w-full px-4 py-2 rounded-xl border border-sand-200 focus:outline-none text-xs focus:border-sage-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Confirmar Nova Senha</label>
+                            <input
+                              type="password"
+                              required
+                              value={confirmNewPassword}
+                              onChange={(e) => setConfirmNewPassword(e.target.value)}
+                              placeholder="Repita a nova senha"
+                              className="w-full px-4 py-2 rounded-xl border border-sand-200 focus:outline-none text-xs focus:border-sage-500"
+                            />
+                          </div>
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={accountLoading}
+                          className="px-4 py-2.5 bg-sage-600 hover:bg-sage-700 disabled:bg-sage-400 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          {accountLoading ? <RefreshCw className="animate-spin" size={13} /> : <Save size={13} />}
+                          <span>Alterar Senha</span>
+                        </button>
+                      </form>
+                    </div>
+
+                    {/* Change Email Card */}
+                    <div className="bg-white p-6 rounded-3xl border border-sand-200 shadow-sm space-y-4">
+                      <div className="border-b border-sand-100 pb-3">
+                        <h4 className="text-sm font-serif font-bold text-sand-950 flex items-center gap-1.5">
+                          <Mail size={15} className="text-sand-700" />
+                          <span>Alterar E-mail de Acesso</span>
+                        </h4>
+                        <p className="text-[10px] text-sand-500 mt-0.5">Troque o e-mail cadastrado no Firebase Authentication.</p>
+                      </div>
+
+                      <form onSubmit={handleUpdateEmail} className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">E-mail Atual</label>
+                            <input
+                              type="email"
+                              disabled
+                              value={user?.email || ''}
+                              className="w-full px-4 py-2 rounded-xl border border-sand-200 text-xs bg-sand-50 text-sand-500 cursor-not-allowed"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Novo E-mail</label>
+                            <input
+                              type="email"
+                              required
+                              value={newEmail}
+                              onChange={(e) => setNewEmail(e.target.value)}
+                              placeholder="novo-email@gmail.com"
+                              className="w-full px-4 py-2 rounded-xl border border-sand-200 focus:outline-none text-xs focus:border-sage-500"
+                            />
+                          </div>
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={accountLoading}
+                          className="px-4 py-2.5 bg-sage-600 hover:bg-sage-700 disabled:bg-sage-400 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          {accountLoading ? <RefreshCw className="animate-spin" size={13} /> : <Save size={13} />}
+                          <span>Alterar E-mail</span>
+                        </button>
+                      </form>
+                    </div>
+
+                    {/* Recover Password Card */}
+                    <div className="bg-white p-6 rounded-3xl border border-sand-200 shadow-sm space-y-4">
+                      <div className="border-b border-sand-100 pb-3">
+                        <h4 className="text-sm font-serif font-bold text-sand-950 flex items-center gap-1.5">
+                          <RefreshCw size={15} className="text-sand-700" />
+                          <span>Recuperar por E-mail</span>
+                        </h4>
+                        <p className="text-[10px] text-sand-500 mt-0.5">Deseja receber um link oficial para redefinir sua senha na sua caixa de entrada?</p>
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                        <p className="text-xs text-sand-600 leading-relaxed max-w-md">
+                          Enviaremos uma mensagem para <strong>{user?.email}</strong> com instruções seguras para alteração da sua senha.
+                        </p>
+                        <button
+                          onClick={handleSendResetEmail}
+                          disabled={accountLoading}
+                          className="px-4 py-2.5 border border-sand-300 hover:bg-sand-50 text-sand-800 rounded-xl text-xs font-bold uppercase cursor-pointer flex items-center gap-1 shrink-0 transition-colors bg-white self-start sm:self-center"
+                        >
+                          <Mail size={13} />
+                          <span>Enviar E-mail</span>
+                        </button>
+                      </div>
+                    </div>
+
+                  </div>
+
+                </div>
+
+                {/* Manage Admins Full Width Section */}
+                <div className="bg-white p-6 rounded-3xl border border-sand-200 shadow-sm space-y-6">
+                  <div className="border-b border-sand-100 pb-3">
+                    <h4 className="text-sm font-serif font-bold text-sand-950 flex items-center gap-2">
+                      <Users size={16} className="text-sage-600" />
+                      <span>Gerenciar Administradores do Sistema</span>
+                    </h4>
+                    <p className="text-[11px] text-sand-500 mt-0.5">
+                      Pré-cadastre e gerencie o acesso de outros profissionais autorizados à área administrativa da clínica.
+                    </p>
+                  </div>
+
+                  {/* Feedback Alerts */}
+                  {(registerError || registerSuccess) && (
+                    <div className={`p-4 rounded-2xl border text-xs flex gap-2.5 items-center leading-relaxed ${
+                      registerError 
+                        ? 'bg-rose-50 text-rose-800 border-rose-100' 
+                        : 'bg-emerald-50 text-emerald-800 border-emerald-100'
+                    }`}>
+                      {registerError ? <AlertCircle size={18} className="shrink-0 text-rose-600" /> : <CheckCircle2 size={18} className="shrink-0 text-emerald-600" />}
+                      <span>{registerError || registerSuccess}</span>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    {/* Column 1: Add New Admin Form */}
+                    <div className="space-y-4">
+                      <h5 className="text-xs font-serif font-bold text-sand-800 uppercase tracking-wider">Autorizar Novo Administrador</h5>
+                      <form onSubmit={handleRegisterAdmin} className="space-y-4">
+                        <div className="space-y-3">
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Nome Completo</label>
+                            <input
+                              type="text"
+                              required
+                              value={newAdminName}
+                              onChange={(e) => setNewAdminName(e.target.value)}
+                              placeholder="Dra. Letícia Silva"
+                              className="w-full px-4 py-2.5 rounded-xl border border-sand-200 focus:outline-none text-xs focus:border-sage-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">E-mail de Acesso</label>
+                            <input
+                              type="email"
+                              required
+                              value={newAdminEmail}
+                              onChange={(e) => setNewAdminEmail(e.target.value)}
+                              placeholder="profissional@ericacostapsi.com.br"
+                              className="w-full px-4 py-2.5 rounded-xl border border-sand-200 focus:outline-none text-xs focus:border-sage-500"
+                            />
+                          </div>
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={registerLoading}
+                          className="px-4 py-2.5 bg-sage-600 hover:bg-sage-700 disabled:bg-sage-400 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          {registerLoading ? <RefreshCw className="animate-spin" size={13} /> : <PlusCircle size={13} />}
+                          <span>Autorizar Acesso</span>
+                        </button>
+                      </form>
+                    </div>
+
+                    {/* Column 2: Admins List */}
+                    <div className="space-y-4">
+                      <h5 className="text-xs font-serif font-bold text-sand-800 uppercase tracking-wider">Profissionais Autorizados</h5>
+                      
+                      <div className="border border-sand-100 rounded-2xl overflow-hidden divide-y divide-sand-100 bg-sand-50/20 max-h-[250px] overflow-y-auto">
+                        {adminList.length === 0 ? (
+                          <div className="p-6 text-center text-xs text-sand-500">
+                            Nenhum outro administrador cadastrado.
+                          </div>
+                        ) : (
+                          adminList.map((adm) => {
+                            const isSelf = adm.email?.toLowerCase() === user?.email?.toLowerCase();
+                            const isErica = adm.email?.toLowerCase() === 'ericacostapsicologa7@gmail.com';
+                            return (
+                              <div key={adm.id} className="p-3.5 flex items-center justify-between gap-4">
+                                <div className="space-y-0.5 truncate">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-bold text-sand-950 truncate">{adm.name || 'Sem Nome'}</span>
+                                    {isSelf && (
+                                      <span className="px-1.5 py-0.5 bg-softblue-50 text-softblue-700 text-[9px] font-mono font-bold uppercase rounded">Você</span>
+                                    )}
+                                    {isErica && (
+                                      <span className="px-1.5 py-0.5 bg-sage-50 text-sage-800 text-[9px] font-mono font-bold uppercase rounded">Dra. Erica</span>
+                                    )}
+                                  </div>
+                                  <div className="text-[10px] text-sand-500 font-mono truncate">{adm.email}</div>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-md text-[10px] font-bold uppercase">
+                                    Ativo
+                                  </span>
+                                  {!isSelf && !isErica && (
+                                    <button
+                                      onClick={() => handleDeleteAdmin(adm.id, adm.email)}
+                                      className="p-1.5 text-rose-600 hover:bg-rose-50 hover:text-rose-700 rounded-lg transition-colors cursor-pointer"
+                                      title="Remover Acesso"
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
