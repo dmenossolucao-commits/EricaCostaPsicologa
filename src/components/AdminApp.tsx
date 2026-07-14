@@ -160,6 +160,9 @@ export default function AdminApp({ navigate }: AdminAppProps) {
   // Image Upload state
   const [uploadLoading, setUploadLoading] = useState<Record<string, boolean>>({});
   const [uploadStatus, setUploadStatus] = useState<Record<string, string>>({});
+  const [selectedUploadFiles, setSelectedUploadFiles] = useState<Record<string, File>>({});
+  const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
 
   // Search/Filters states
   const [searchQuery, setSearchQuery] = useState('');
@@ -713,24 +716,91 @@ export default function AdminApp({ navigate }: AdminAppProps) {
     }
   };
 
-  // Image Upload Handler
-  const handleImageUpload = async (key: 'hero' | 'about' | 'logo', file: File) => {
+  // Image Upload and Preview Handlers
+  const handleSelectImageForUpload = (key: 'hero' | 'about' | 'logo' | 'blog', file: File) => {
+    if (previewUrls[key]) {
+      URL.revokeObjectURL(previewUrls[key]);
+    }
+    const previewUrl = URL.createObjectURL(file);
+    setSelectedUploadFiles(prev => ({ ...prev, [key]: file }));
+    setPreviewUrls(prev => ({ ...prev, [key]: previewUrl }));
+    setUploadProgress(prev => ({ ...prev, [key]: 0 }));
+    setUploadStatus(prev => ({ ...prev, [key]: 'Aguardando confirmação de upload...' }));
+  };
+
+  const handleCancelImageSelection = (key: 'hero' | 'about' | 'logo' | 'blog') => {
+    if (previewUrls[key]) {
+      URL.revokeObjectURL(previewUrls[key]);
+    }
+    setSelectedUploadFiles(prev => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setPreviewUrls(prev => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setUploadStatus(prev => ({ ...prev, [key]: '' }));
+    setUploadProgress(prev => ({ ...prev, [key]: 0 }));
+  };
+
+  const handleConfirmImageUpload = async (key: 'hero' | 'about' | 'logo') => {
+    const file = selectedUploadFiles[key];
+    if (!file) return;
+
     setUploadLoading(prev => ({ ...prev, [key]: true }));
-    setUploadStatus(prev => ({ ...prev, [key]: 'Carregando arquivo...' }));
+    setUploadStatus(prev => ({ ...prev, [key]: 'Iniciando upload...' }));
+    setUploadProgress(prev => ({ ...prev, [key]: 0 }));
+
     try {
-      const url = await contentService.uploadImage(file);
+      const url = await contentService.uploadImage(file, 'site', (progress) => {
+        setUploadProgress(prev => ({ ...prev, [key]: progress }));
+        setUploadStatus(prev => ({ ...prev, [key]: `Enviando arquivo: ${progress}%` }));
+      });
+
       const updatedInfo = { ...siteContent.psychologist_info };
-      if (key === 'hero') updatedInfo.heroImageUrl = url;
-      else if (key === 'about') updatedInfo.aboutImageUrl = url;
-      else if (key === 'logo') updatedInfo.logoUrl = url;
+      let oldUrl = '';
+      if (key === 'hero') { oldUrl = updatedInfo.heroImageUrl || ''; updatedInfo.heroImageUrl = url; }
+      else if (key === 'about') { oldUrl = updatedInfo.aboutImageUrl || ''; updatedInfo.aboutImageUrl = url; }
+      else if (key === 'logo') { oldUrl = updatedInfo.logoUrl || ''; updatedInfo.logoUrl = url; }
 
       await updateSiteContent({ psychologist_info: updatedInfo });
+
+      if (oldUrl) {
+        try {
+          await contentService.deleteImage(oldUrl);
+        } catch (delErr) {
+          console.error("Erro ao deletar imagem anterior do storage:", delErr);
+        }
+      }
+
       setUploadStatus(prev => ({ ...prev, [key]: 'Imagem atualizada com sucesso!' }));
+      setUploadProgress(prev => ({ ...prev, [key]: 100 }));
+
       setTimeout(() => {
+        setSelectedUploadFiles(prev => {
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
+        setPreviewUrls(prev => {
+          const next = { ...prev };
+          if (next[key]) {
+            URL.revokeObjectURL(next[key]);
+            delete next[key];
+          }
+          return next;
+        });
         setUploadStatus(prev => ({ ...prev, [key]: '' }));
+        setUploadProgress(prev => ({ ...prev, [key]: 0 }));
       }, 3000);
-    } catch (err) {
-      setUploadStatus(prev => ({ ...prev, [key]: 'Falha no upload.' }));
+
+    } catch (err: any) {
+      console.error(err);
+      setUploadStatus(prev => ({ ...prev, [key]: `Erro no upload: ${err.message || err}` }));
+      setUploadProgress(prev => ({ ...prev, [key]: 0 }));
     } finally {
       setUploadLoading(prev => ({ ...prev, [key]: false }));
     }
@@ -1115,6 +1185,24 @@ export default function AdminApp({ navigate }: AdminAppProps) {
               >
                 {authLoading ? <RefreshCw className="animate-spin" size={14} /> : <Lock size={14} />}
                 <span>Entrar</span>
+              </button>
+
+              <div className="relative flex py-1 items-center">
+                <div className="flex-grow border-t border-sand-200"></div>
+                <span className="flex-shrink mx-4 text-[10px] font-bold text-sand-400 uppercase font-mono">Ou</span>
+                <div className="flex-grow border-t border-sand-200"></div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleGoogleLogin}
+                disabled={authLoading}
+                className="w-full py-2.5 border border-sand-300 hover:bg-sand-50 text-sand-800 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow-sm cursor-pointer transition-colors bg-white"
+              >
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                  <path fill="#EA4335" d="M12.24 10.285V14.4h6.887c-.275 1.565-1.88 4.604-6.887 4.604-4.33 0-7.859-3.578-7.859-8s3.529-8 7.859-8c2.46 0 4.105 1.025 5.047 1.926l3.227-3.11C18.281 1.09 15.542 0 12.24 0 5.582 0 .18 5.4.18 12s5.402 12 12.06 12c6.945 0 11.56-4.887 11.56-11.777 0-.792-.084-1.4-.188-1.938H12.24z"/>
+                </svg>
+                <span>Acessar com Google</span>
               </button>
             </form>
           )}
@@ -1747,7 +1835,7 @@ export default function AdminApp({ navigate }: AdminAppProps) {
                     <Sparkles size={16} className="text-dusty-600" /> Galeria de Imagens & Fotos Clínicas
                   </h3>
                   <p className="text-xs text-sand-700 leading-relaxed mt-1">
-                    As fotos do site são gerenciadas diretamente pelo Firebase Storage. Substitua as fotos principal ou bio correspondentes e a Landing Page atualizará as imagens automaticamente, sem alterar nenhum arquivo de código.
+                    As fotos do site são armazenadas com segurança no Firebase Storage. Selecione uma nova foto para visualizar uma prévia local. Após confirmar, o arquivo será enviado ao Storage e a URL pública será atualizada no banco de dados Firestore, refletindo instantaneamente na Landing Page.
                   </p>
                 </div>
 
@@ -1756,66 +1844,129 @@ export default function AdminApp({ navigate }: AdminAppProps) {
                     { key: 'hero', label: 'Foto Principal (Hero)', section: 'Topo da Página', url: siteContent.psychologist_info.heroImageUrl, desc: 'Exibida na abertura do site.' },
                     { key: 'about', label: 'Foto da Biografia', section: 'Seção Sobre Mim', url: siteContent.psychologist_info.aboutImageUrl, desc: 'Apresentação profissional e retrato.' },
                     { key: 'logo', label: 'Logotipo Oficial', section: 'Identidade Visual', url: siteContent.psychologist_info.logoUrl, desc: 'Exibido no cabeçalho/navbar.', objectFit: 'object-contain' }
-                  ].map((imgItem) => (
-                    <div key={imgItem.key} className="bg-white p-5 rounded-2xl border border-sand-200 shadow-sm flex flex-col justify-between space-y-4">
-                      <div>
-                        <span className="text-[9px] font-mono font-bold uppercase text-sand-500 bg-sand-100 px-2 py-0.5 rounded">{imgItem.section}</span>
-                        <h4 className="text-xs font-bold text-sand-950 mt-2 font-serif">{imgItem.label}</h4>
-                        <p className="text-[11px] text-sand-500 mt-1">{imgItem.desc}</p>
-                      </div>
+                  ].map((imgItem) => {
+                    const hasLocalPreview = !!previewUrls[imgItem.key];
+                    const displayUrl = previewUrls[imgItem.key] || imgItem.url;
+                    const progress = uploadProgress[imgItem.key] || 0;
+                    const statusText = uploadStatus[imgItem.key] || '';
+                    const isLoading = !!uploadLoading[imgItem.key];
 
-                      <div className="aspect-[4/5] w-full rounded-xl bg-sand-50/50 border border-dashed border-sand-200 overflow-hidden relative flex items-center justify-center p-2.5">
-                        {imgItem.url ? (
-                          <img
-                            src={imgItem.url}
-                            alt={imgItem.label}
-                            className={`w-full h-full rounded-lg ${imgItem.objectFit || 'object-cover'}`}
-                            referrerPolicy="no-referrer"
-                          />
-                        ) : (
-                          <span className="text-[10px] font-mono text-sand-400">Nenhuma imagem personalizada</span>
-                        )}
-
-                        {uploadLoading[imgItem.key] && (
-                          <div className="absolute inset-0 bg-white/80 flex items-center justify-center">
-                            <RefreshCw className="animate-spin text-dusty-600" size={20} />
+                    return (
+                      <div key={imgItem.key} className="bg-white p-5 rounded-2xl border border-sand-200 shadow-sm flex flex-col justify-between space-y-4 relative">
+                        <div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[9px] font-mono font-bold uppercase text-sand-500 bg-sand-100 px-2 py-0.5 rounded">{imgItem.section}</span>
+                            {hasLocalPreview && (
+                              <span className="text-[9px] font-mono font-bold uppercase text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded animate-pulse">Prévia</span>
+                            )}
                           </div>
-                        )}
-                      </div>
+                          <h4 className="text-xs font-bold text-sand-950 mt-2 font-serif">{imgItem.label}</h4>
+                          <p className="text-[11px] text-sand-500 mt-1">{imgItem.desc}</p>
+                        </div>
 
-                      <div className="space-y-2">
-                        {uploadStatus[imgItem.key] && (
-                          <p className="text-[10px] font-bold text-dusty-700 text-center uppercase font-mono">{uploadStatus[imgItem.key]}</p>
-                        )}
-                        
-                        <div className="flex gap-2">
-                          <label className="flex-1 py-2 bg-dusty-600 hover:bg-dusty-700 text-white rounded-xl text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer shadow-sm transition-all">
-                            <Upload size={12} />
-                            <span>Upload</span>
-                            <input
-                              type="file"
-                              accept="image/*"
-                              className="hidden"
-                              onChange={(e) => {
-                                if (e.target.files && e.target.files[0]) {
-                                  handleImageUpload(imgItem.key as any, e.target.files[0]);
-                                }
-                              }}
+                        <div className="aspect-[4/5] w-full rounded-xl bg-sand-50/50 border border-dashed border-sand-200 overflow-hidden relative flex items-center justify-center p-2.5">
+                          {displayUrl ? (
+                            <img
+                              src={displayUrl}
+                              alt={imgItem.label}
+                              className={`w-full h-full rounded-lg ${imgItem.objectFit || 'object-cover'} transition-all`}
+                              referrerPolicy="no-referrer"
                             />
-                          </label>
-                          {imgItem.url && (
-                            <button
-                              onClick={() => handleClearImage(imgItem.key as any)}
-                              className="p-2 border border-sand-200 hover:bg-rose-50 text-rose-600 rounded-xl cursor-pointer"
-                              title="Remover Imagem"
-                            >
-                              <Trash2 size={14} />
-                            </button>
+                          ) : (
+                            <span className="text-[10px] font-mono text-sand-400">Nenhuma imagem personalizada</span>
+                          )}
+
+                          {isLoading && (
+                            <div className="absolute inset-0 bg-white/90 flex flex-col items-center justify-center p-4 space-y-2">
+                              <RefreshCw className="animate-spin text-dusty-600" size={24} />
+                              <span className="text-[10px] font-bold text-sand-700 font-mono">{progress}%</span>
+                              <div className="w-24 bg-sand-100 rounded-full h-1.5 overflow-hidden">
+                                <div className="bg-dusty-600 h-full" style={{ width: `${progress}%` }} />
+                              </div>
+                            </div>
                           )}
                         </div>
+
+                        <div className="space-y-3">
+                          {statusText && (
+                            <div className={`p-2 rounded-lg text-center text-[10px] font-bold uppercase font-mono border ${
+                              statusText.includes('sucesso') 
+                                ? 'bg-emerald-50 border-emerald-200 text-emerald-800' 
+                                : statusText.includes('Erro') || statusText.includes('Falha')
+                                  ? 'bg-rose-50 border-rose-200 text-rose-800'
+                                  : 'bg-sand-50 border-sand-200 text-sand-800'
+                            }`}>
+                              {statusText}
+                            </div>
+                          )}
+
+                          {/* Progress bar displayed below if loaded outside overlay */}
+                          {!isLoading && progress > 0 && progress < 100 && (
+                            <div className="space-y-1">
+                              <div className="flex justify-between text-[9px] text-sand-500 font-mono">
+                                <span>Progresso</span>
+                                <span>{progress}%</span>
+                              </div>
+                              <div className="w-full bg-sand-100 rounded-full h-1.5 overflow-hidden">
+                                <div className="bg-dusty-600 h-full transition-all" style={{ width: `${progress}%` }} />
+                              </div>
+                            </div>
+                          )}
+                          
+                          <div className="flex flex-col gap-2">
+                            {hasLocalPreview ? (
+                              <div className="flex gap-2 w-full">
+                                <button
+                                  type="button"
+                                  onClick={() => handleConfirmImageUpload(imgItem.key as any)}
+                                  disabled={isLoading}
+                                  className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer shadow-sm transition-all"
+                                >
+                                  <Save size={12} />
+                                  <span>Confirmar</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCancelImageSelection(imgItem.key as any)}
+                                  disabled={isLoading}
+                                  className="py-2 px-3 bg-sand-100 hover:bg-sand-200 disabled:opacity-50 text-sand-700 rounded-xl text-[11px] font-bold uppercase flex items-center justify-center gap-1.5 cursor-pointer transition-all border border-sand-200"
+                                >
+                                  <span>Cancelar</span>
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex gap-2">
+                                <label className="flex-1 py-2 bg-dusty-600 hover:bg-dusty-700 text-white rounded-xl text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer shadow-sm transition-all">
+                                  <Upload size={12} />
+                                  <span>Selecionar</span>
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    onChange={(e) => {
+                                      if (e.target.files && e.target.files[0]) {
+                                        handleSelectImageForUpload(imgItem.key as any, e.target.files[0]);
+                                      }
+                                    }}
+                                  />
+                                </label>
+                                {imgItem.url && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleClearImage(imgItem.key as any)}
+                                    className="p-2 border border-sand-200 hover:bg-rose-50 text-rose-600 rounded-xl cursor-pointer"
+                                    title="Remover Imagem"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </motion.div>
             )}
@@ -2897,34 +3048,143 @@ export default function AdminApp({ navigate }: AdminAppProps) {
 
                   <div>
                     <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Imagem de Capa (Opcional)</label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={postImage}
-                        onChange={(e) => setPostImage(e.target.value)}
-                        placeholder="https://images.unsplash.com/... ou selecione um arquivo"
-                        className="flex-1 px-3.5 py-2 text-xs rounded-xl border border-sand-200 focus:outline-none font-mono"
-                      />
-                      <label className="px-4 py-2 bg-dusty-600 hover:bg-dusty-700 text-white rounded-xl text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer shadow-sm transition-all shrink-0">
-                        <Upload size={12} />
-                        <span>Carregar</span>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={async (e) => {
-                            if (e.target.files && e.target.files[0]) {
-                              const file = e.target.files[0];
-                              try {
-                                const url = await contentService.uploadImage(file, 'blog');
-                                setPostImage(url);
-                              } catch (err) {
-                                alert("Falha ao carregar imagem.");
-                              }
-                            }
-                          }}
-                        />
-                      </label>
+                    <div className="space-y-3">
+                      {postImage && !previewUrls['blog'] && (
+                        <div className="relative aspect-video w-full max-w-[280px] rounded-xl overflow-hidden bg-sand-50 border border-sand-200 group">
+                          <img
+                            src={postImage}
+                            alt="Capa do artigo"
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setPostImage('')}
+                            className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-full transition-colors cursor-pointer"
+                            title="Remover Imagem"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      )}
+
+                      {previewUrls['blog'] && (
+                        <div className="relative aspect-video w-full max-w-[280px] rounded-xl overflow-hidden bg-sand-50 border border-amber-200">
+                          <img
+                            src={previewUrls['blog']}
+                            alt="Prévia local da capa"
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="absolute top-2 left-2 px-2 py-0.5 text-[9px] font-mono font-bold uppercase bg-amber-500 text-white rounded animate-pulse shadow-sm">
+                            Prévia Selecionada
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleCancelImageSelection('blog')}
+                            disabled={uploadLoading['blog']}
+                            className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-full transition-colors cursor-pointer"
+                            title="Cancelar"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      )}
+
+                      {uploadStatus['blog'] && (
+                        <div className={`p-2 rounded-xl text-center text-[10px] font-bold uppercase font-mono border max-w-[320px] ${
+                          uploadStatus['blog'].includes('sucesso') || uploadStatus['blog'].includes('Sucesso')
+                            ? 'bg-emerald-50 border-emerald-200 text-emerald-800' 
+                            : uploadStatus['blog'].includes('Erro') || uploadStatus['blog'].includes('Falha')
+                              ? 'bg-rose-50 border-rose-200 text-rose-800'
+                              : 'bg-sand-50 border-sand-200 text-sand-800'
+                        }`}>
+                          {uploadStatus['blog']}
+                        </div>
+                      )}
+
+                      {uploadProgress['blog'] !== undefined && uploadProgress['blog'] > 0 && uploadProgress['blog'] <= 100 && (
+                        <div className="space-y-1 max-w-[320px]">
+                          <div className="flex justify-between text-[9px] text-sand-500 font-mono">
+                            <span>Progresso</span>
+                            <span>{uploadProgress['blog']}%</span>
+                          </div>
+                          <div className="w-full bg-sand-100 rounded-full h-1.5 overflow-hidden">
+                            <div className="bg-dusty-600 h-full transition-all" style={{ width: `${uploadProgress['blog']}%` }} />
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex gap-2">
+                        {previewUrls['blog'] ? (
+                          <div className="flex gap-2 w-full max-w-[320px]">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const file = selectedUploadFiles['blog'];
+                                if (!file) return;
+                                setUploadLoading(prev => ({ ...prev, blog: true }));
+                                setUploadStatus(prev => ({ ...prev, blog: 'Iniciando upload...' }));
+                                setUploadProgress(prev => ({ ...prev, blog: 0 }));
+                                try {
+                                  const url = await contentService.uploadImage(file, 'blog', (progress) => {
+                                    setUploadProgress(prev => ({ ...prev, blog: progress }));
+                                    setUploadStatus(prev => ({ ...prev, blog: `Enviando: ${progress}%` }));
+                                  });
+                                  setPostImage(url);
+                                  setUploadStatus(prev => ({ ...prev, blog: 'Sucesso! Imagem pronta.' }));
+                                  setUploadProgress(prev => ({ ...prev, blog: 100 }));
+                                  setTimeout(() => {
+                                    handleCancelImageSelection('blog');
+                                  }, 2000);
+                                } catch (err: any) {
+                                  console.error(err);
+                                  setUploadStatus(prev => ({ ...prev, blog: `Erro: ${err.message || err}` }));
+                                } finally {
+                                  setUploadLoading(prev => ({ ...prev, blog: false }));
+                                }
+                              }}
+                              disabled={uploadLoading['blog']}
+                              className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer shadow-sm transition-all"
+                            >
+                              <Save size={12} />
+                              <span>Fazer Upload</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleCancelImageSelection('blog')}
+                              disabled={uploadLoading['blog']}
+                              className="py-2 px-3 bg-sand-100 hover:bg-sand-200 disabled:opacity-50 text-sand-700 rounded-xl text-[11px] font-bold uppercase flex items-center justify-center gap-1.5 cursor-pointer transition-all border border-sand-200"
+                            >
+                              <span>Cancelar</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex gap-2 w-full">
+                            <input
+                              type="text"
+                              value={postImage}
+                              onChange={(e) => setPostImage(e.target.value)}
+                              placeholder="https://images.unsplash.com/... ou selecione um arquivo"
+                              className="flex-1 px-3.5 py-2 text-xs rounded-xl border border-sand-200 focus:outline-none font-mono"
+                            />
+                            <label className="px-4 py-2 bg-dusty-600 hover:bg-dusty-700 text-white rounded-xl text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer shadow-sm transition-all shrink-0">
+                              <Upload size={12} />
+                              <span>Selecionar</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={(e) => {
+                                  if (e.target.files && e.target.files[0]) {
+                                    handleSelectImageForUpload('blog', e.target.files[0]);
+                                  }
+                                }}
+                              />
+                            </label>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
 

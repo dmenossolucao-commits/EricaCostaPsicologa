@@ -1,5 +1,5 @@
 import { doc, getDoc, setDoc, collection, getDocs, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage } from '../firebase';
 import { Service, BlogPost, FAQ, Testimonial, Patient } from '../types';
 import { PSYCHOLOGIST_INFO, SERVICES, PROCESS_STEPS, FAQS, TESTIMONIALS, BLOG_POSTS } from '../data';
@@ -264,30 +264,39 @@ export const contentService = {
     }
   },
 
-  // Upload image to Firebase Storage (with Base64 fallback)
-  async uploadImage(file: File, folder: string = 'site'): Promise<string> {
-    try {
-      const fileName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
-      const fileRef = ref(storage, `${folder}/${fileName}`);
-      const snap = await uploadBytes(fileRef, file);
-      const url = await getDownloadURL(snap.ref);
-      return url;
-    } catch (err) {
-      console.warn("Storage upload failed, falling back to Base64 in Firestore:", err);
-      // Fallback to base64 string
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          if (typeof reader.result === 'string') {
-            resolve(reader.result);
-          } else {
-            reject(new Error("Failed to convert image to Base64"));
+  // Upload image to Firebase Storage (with optional progress tracking)
+  async uploadImage(
+    file: File,
+    folder: string = 'site',
+    onProgress?: (progress: number) => void
+  ): Promise<string> {
+    const fileName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+    const fileRef = ref(storage, `${folder}/${fileName}`);
+    const uploadTask = uploadBytesResumable(fileRef, file);
+
+    return new Promise((resolve, reject) => {
+      uploadTask.on(
+        'state_changed',
+        (snapshot) => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          if (onProgress) {
+            onProgress(Math.round(progress));
           }
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-    }
+        },
+        (error) => {
+          console.error("Storage upload failed:", error);
+          reject(error);
+        },
+        async () => {
+          try {
+            const url = await getDownloadURL(uploadTask.snapshot.ref);
+            resolve(url);
+          } catch (urlError) {
+            reject(urlError);
+          }
+        }
+      );
+    });
   },
 
   // Delete image from Firebase Storage
