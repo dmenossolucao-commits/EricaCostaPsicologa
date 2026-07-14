@@ -1,0 +1,6 @@
+{
+  "name": "Psicóloga Erica Costa",
+  "description": "Site institucional moderno, elegante e acolhedor para a Psicóloga Erica Costa, focado em atendimento psicológico online.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

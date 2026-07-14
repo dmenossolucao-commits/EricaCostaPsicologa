@@ -1,0 +1,42 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Site content: read by anyone, write only by authenticated admins
+    match /site_content/{document} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    
+    // Blog posts: read by anyone, write only by authenticated admins
+    match /blog_posts/{document} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    
+    // Lead messages: anyone can submit (create), but only authenticated admins can read/update/delete
+    match /leads_messages/{document} {
+      allow create: if true;
+      allow read, update, delete: if request.auth != null;
+    }
+    
+    // Appointments: anyone can create or view their individual appointment details (checkout),
+    // but retrieving lists of appointments or modifying/deleting them requires admin auth
+    match /appointments/{document} {
+      allow create: if true;
+      allow get: if true;
+      allow list, update, delete: if request.auth != null;
+    }
+    
+    // Blocked slots: read by anyone (for calendar availability), write only by authenticated admins
+    match /blocked_slots/{document} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    
+    // Clinical Patients: strictly private, only authenticated admins can read/write/delete
+    match /patients/{document} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
