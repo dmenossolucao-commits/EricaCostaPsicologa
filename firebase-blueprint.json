@@ -1,0 +1,128 @@
+{
+  "entities": {
+    "SiteContent": {
+      "title": "SiteContent",
+      "description": "Configurações, informações institucionais, faqs e personalização do site da psicóloga.",
+      "type": "object",
+      "properties": {
+        "psychologist_info": { "type": "object" },
+        "services": { "type": "array" },
+        "process_steps": { "type": "array" },
+        "faqs": { "type": "array" },
+        "testimonials": { "type": "array" },
+        "appearance": { "type": "object" },
+        "seo": { "type": "object" },
+        "agenda_config": { "type": "object" }
+      },
+      "required": ["psychologist_info", "services", "appearance", "seo"]
+    },
+    "BlogPost": {
+      "title": "BlogPost",
+      "description": "Postagem ou artigo do blog clínico.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "excerpt": { "type": "string" },
+        "content": { "type": "string" },
+        "category": { "type": "string" },
+        "readTime": { "type": "string" },
+        "image": { "type": "string" },
+        "date": { "type": "string" }
+      },
+      "required": ["title", "content", "category", "date"]
+    },
+    "LeadMessage": {
+      "title": "LeadMessage",
+      "description": "Mensagem recebida através do formulário de contato.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "message": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "responded"] },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["name", "email", "phone", "message", "status", "timestamp"]
+    },
+    "Appointment": {
+      "title": "Appointment",
+      "description": "Dados do agendamento de consulta de terapia.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "serviceId": { "type": "string" },
+        "serviceTitle": { "type": "string" },
+        "patientName": { "type": "string" },
+        "patientEmail": { "type": "string" },
+        "patientPhone": { "type": "string" },
+        "date": { "type": "string" },
+        "timeSlot": { "type": "string" },
+        "amount": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending_payment", "confirmed", "cancelled"] },
+        "paymentType": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "serviceId", "serviceTitle", "patientName", "patientEmail", "patientPhone", "date", "timeSlot", "amount", "status", "createdAt"]
+    },
+    "BlockedSlot": {
+      "title": "BlockedSlot",
+      "description": "Exceção administrativa de bloqueio de horário na agenda.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "timeSlot": { "type": "string" }
+      },
+      "required": ["date", "timeSlot"]
+    },
+    "Patient": {
+      "title": "Patient",
+      "description": "Ficha do paciente clínico, incluindo histórico e recibos emitidos.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "cpf": { "type": "string" },
+        "dateOfBirth": { "type": "string" },
+        "address": { "type": "string" },
+        "notes": { "type": "string" },
+        "history": { "type": "string" },
+        "evolutions": { "type": "array" },
+        "recibos": { "type": "array" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["name", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/site_content/{documentId}": {
+      "schema": "SiteContent",
+      "description": "Armazena as configurações e o conteúdo institucional do site da psicóloga."
+    },
+    "/blog_posts/{documentId}": {
+      "schema": "BlogPost",
+      "description": "Coleção de postagens e artigos do blog clínico."
+    },
+    "/leads_messages/{documentId}": {
+      "schema": "LeadMessage",
+      "description": "Coleção de mensagens recebidas de leads através de formulário."
+    },
+    "/appointments/{documentId}": {
+      "schema": "Appointment",
+      "description": "Coleção contendo todos os agendamentos e registros de faturamento."
+    },
+    "/blocked_slots/{documentId}": {
+      "schema": "BlockedSlot",
+      "description": "Exceções na agenda que bloqueiam horários de consultas."
+    },
+    "/patients/{documentId}": {
+      "schema": "Patient",
+      "description": "Prontuário completo, histórico e recibos de finanças dos pacientes."
+    }
+  }
+}

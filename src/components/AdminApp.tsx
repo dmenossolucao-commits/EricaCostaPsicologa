@@ -28,6 +28,34 @@ export default function AdminApp({ navigate }: AdminAppProps) {
     'dashboard' | 'perfil' | 'fotos' | 'agenda' | 'pacientes' | 'mensagens' | 'blog' | 'pagamentos' | 'configuracoes'
   >('dashboard');
 
+  const handleTabClick = (tabId: string) => {
+    navigate('/admin/' + tabId);
+  };
+
+  useEffect(() => {
+    const handlePathToTab = () => {
+      const path = window.location.pathname;
+      if (path.startsWith('/admin/')) {
+        const subPath = path.substring(7); // '/admin/' has 7 characters
+        const validTabs = ['dashboard', 'perfil', 'fotos', 'agenda', 'pacientes', 'mensagens', 'blog', 'pagamentos', 'configuracoes'];
+        if (validTabs.includes(subPath)) {
+          setActiveTab(subPath as any);
+        }
+      } else if (path === '/admin') {
+        setActiveTab('dashboard');
+      }
+    };
+
+    handlePathToTab();
+    window.addEventListener('popstate', handlePathToTab);
+    window.addEventListener('navigate', handlePathToTab);
+
+    return () => {
+      window.removeEventListener('popstate', handlePathToTab);
+      window.removeEventListener('navigate', handlePathToTab);
+    };
+  }, []);
+
   // Authentication State
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
@@ -676,7 +704,7 @@ export default function AdminApp({ navigate }: AdminAppProps) {
             ].map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as any)}
+                onClick={() => handleTabClick(tab.id)}
                 className={`w-full px-4 py-2.5 rounded-xl text-left text-xs font-semibold flex items-center gap-3 cursor-pointer transition-all ${
                   activeTab === tab.id
                     ? 'bg-softblue-500 text-white shadow-sm shadow-softblue-500/10'
@@ -962,7 +990,7 @@ export default function AdminApp({ navigate }: AdminAppProps) {
                                   key={appt.id} 
                                   onClick={() => {
                                     setSelectedAppt(appt);
-                                    setActiveTab('agenda');
+                                    handleTabClick('agenda');
                                   }}
                                   className="p-3 bg-softblue-50/50 border-l-4 border-softblue-500 rounded-xl flex items-center justify-between gap-2 hover:bg-softblue-50 cursor-pointer transition-colors"
                                 >
@@ -986,7 +1014,7 @@ export default function AdminApp({ navigate }: AdminAppProps) {
 
                       <div className="pt-4 border-t border-sand-100">
                         <button
-                          onClick={() => setActiveTab('agenda')}
+                          onClick={() => handleTabClick('agenda')}
                           className="w-full py-2.5 bg-sand-950 hover:bg-sand-900 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer text-center"
                         >
                           Gerenciar Agenda Completa
