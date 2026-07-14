@@ -660,9 +660,15 @@ export default function AdminApp({ navigate }: AdminAppProps) {
     setAuthLoading(true);
     setAuthError('');
     try {
-      await signInWithEmailAndPassword(auth, emailInput, passwordInput);
+      await signInWithEmailAndPassword(auth, emailInput.trim(), passwordInput);
     } catch (err: any) {
-      setAuthError('E-mail ou senha incorretos. Por favor, tente novamente.');
+      console.error("Erro no login:", err);
+      if (emailInput.trim().toLowerCase() === 'ericacostapsicologa7@gmail.com') {
+        setAuthError('E-mail ou senha incorretos. Caso seja seu primeiro acesso e sua conta do Firebase ainda não tenha sido ativada, a opção "Configuração de Primeiro Acesso" foi liberada logo abaixo para que você possa configurá-la de forma automática.');
+        setFirstAdminExists(false);
+      } else {
+        setAuthError('E-mail ou senha incorretos. Por favor, tente novamente.');
+      }
     } finally {
       setAuthLoading(false);
     }
