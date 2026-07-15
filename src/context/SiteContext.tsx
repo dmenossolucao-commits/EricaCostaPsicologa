@@ -66,6 +66,18 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (metaDesc && data.seo?.description) {
         metaDesc.setAttribute('content', data.seo.description);
       }
+      
+      // Update favicon on the fly
+      const faviconUrl = (data.appearance as any)?.faviconUrl || (data.psychologist_info as any)?.faviconUrl;
+      if (faviconUrl) {
+        let link: HTMLLinkElement | null = document.querySelector("link[rel*='icon']");
+        if (!link) {
+          link = document.createElement('link');
+          link.rel = 'icon';
+          document.head.appendChild(link);
+        }
+        link.href = faviconUrl;
+      }
     } catch (err) {
       console.error("Error refreshing site content:", err);
     }

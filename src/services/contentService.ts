@@ -1,8 +1,55 @@
-import { doc, getDoc, setDoc, collection, getDocs, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, getDocs, addDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
-import { db, storage } from '../firebase';
-import { Service, BlogPost, FAQ, Testimonial, Patient } from '../types';
+import { db, storage, auth } from '../firebase';
+import { Service, BlogPost, FAQ, Testimonial, Patient, PatientRecord, PatientDocument } from '../types';
 import { PSYCHOLOGIST_INFO, SERVICES, PROCESS_STEPS, FAQS, TESTIMONIALS, BLOG_POSTS } from '../data';
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 export interface WeeklyScheduleDay {
   enabled: boolean;
@@ -521,7 +568,7 @@ export const contentService = {
       return list.sort((a, b) => b.createdAt - a.createdAt);
     } catch (err) {
       console.error("Error fetching patients:", err);
-      return [];
+      handleFirestoreError(err, OperationType.LIST, 'patients');
     }
   },
 
@@ -535,7 +582,7 @@ export const contentService = {
       return { ...patient, id: docRef.id, createdAt: Date.now() } as Patient;
     } catch (err) {
       console.error("Error creating patient:", err);
-      throw err;
+      handleFirestoreError(err, OperationType.CREATE, 'patients');
     }
   },
 
@@ -545,7 +592,7 @@ export const contentService = {
       await updateDoc(docRef, data);
     } catch (err) {
       console.error("Error updating patient:", err);
-      throw err;
+      handleFirestoreError(err, OperationType.UPDATE, `patients/${id}`);
     }
   },
 
@@ -555,7 +602,178 @@ export const contentService = {
       await deleteDoc(docRef);
     } catch (err) {
       console.error("Error deleting patient:", err);
-      throw err;
+      handleFirestoreError(err, OperationType.DELETE, `patients/${id}`);
+    }
+  },
+
+  // === CLINICAL MEDICAL RECORDS (patient_records) ===
+  async getPatientRecords(patientId: string): Promise<PatientRecord[]> {
+    try {
+      const colRef = collection(db, 'patient_records');
+      const q = query(colRef, where('patientId', '==', patientId));
+      const snap = await getDocs(q);
+      const list = snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as PatientRecord));
+      
+      // Sort from newest to oldest
+      return list.sort((a, b) => {
+        // Safe parsing of sessionDate (YYYY-MM-DD)
+        const dateA = new Date(`${a.sessionDate}T00:00:00`).getTime() || 0;
+        const dateB = new Date(`${b.sessionDate}T00:00:00`).getTime() || 0;
+        if (dateB !== dateA) {
+          return dateB - dateA;
+        }
+        return b.createdAt - a.createdAt;
+      });
+    } catch (err) {
+      console.error("Error fetching patient records:", err);
+      handleFirestoreError(err, OperationType.LIST, `patient_records`);
+    }
+  },
+
+  async createPatientRecord(record: Omit<PatientRecord, 'id' | 'createdAt' | 'updatedAt'>): Promise<PatientRecord> {
+    try {
+      const colRef = collection(db, 'patient_records');
+      const now = Date.now();
+      const docRef = await addDoc(colRef, {
+        ...record,
+        createdAt: now,
+        updatedAt: now
+      });
+      return {
+        ...record,
+        id: docRef.id,
+        createdAt: now,
+        updatedAt: now
+      } as PatientRecord;
+    } catch (err) {
+      console.error("Error creating patient record:", err);
+      handleFirestoreError(err, OperationType.CREATE, 'patient_records');
+    }
+  },
+
+  async updatePatientRecord(id: string, data: Partial<PatientRecord>): Promise<void> {
+    try {
+      const docRef = doc(db, 'patient_records', id);
+      await updateDoc(docRef, {
+        ...data,
+        updatedAt: Date.now()
+      });
+    } catch (err) {
+      console.error("Error updating patient record:", err);
+      handleFirestoreError(err, OperationType.UPDATE, `patient_records/${id}`);
+    }
+  },
+
+  async deletePatientRecord(id: string): Promise<void> {
+    try {
+      const docRef = doc(db, 'patient_records', id);
+      await deleteDoc(docRef);
+    } catch (err) {
+      console.error("Error deleting patient record:", err);
+      handleFirestoreError(err, OperationType.DELETE, `patient_records/${id}`);
+    }
+  },
+
+  // === CLINICAL DOCUMENTS (patient_documents) ===
+  async getPatientDocuments(patientId: string): Promise<PatientDocument[]> {
+    try {
+      const colRef = collection(db, 'patient_documents');
+      const q = query(colRef, where('patientId', '==', patientId));
+      const snap = await getDocs(q);
+      const list = snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as PatientDocument));
+      
+      // Sort from newest to oldest
+      return list.sort((a, b) => b.uploadedAt - a.uploadedAt);
+    } catch (err) {
+      console.error("Error fetching patient documents:", err);
+      handleFirestoreError(err, OperationType.LIST, 'patient_documents');
+    }
+  },
+
+  async createPatientDocument(docData: Omit<PatientDocument, 'id' | 'uploadedAt'>): Promise<PatientDocument> {
+    try {
+      const colRef = collection(db, 'patient_documents');
+      const now = Date.now();
+      const payload = {
+        ...docData,
+        uploadedAt: now
+      };
+      const docRef = await addDoc(colRef, payload);
+      return {
+        ...payload,
+        id: docRef.id,
+        uploadedAt: now
+      } as PatientDocument;
+    } catch (err) {
+      console.error("Error creating patient document:", err);
+      handleFirestoreError(err, OperationType.CREATE, 'patient_documents');
+    }
+  },
+
+  async updatePatientDocument(id: string, data: Partial<PatientDocument>): Promise<void> {
+    try {
+      const docRef = doc(db, 'patient_documents', id);
+      await updateDoc(docRef, data);
+    } catch (err) {
+      console.error("Error updating patient document:", err);
+      handleFirestoreError(err, OperationType.UPDATE, `patient_documents/${id}`);
+    }
+  },
+
+  async deletePatientDocument(id: string): Promise<void> {
+    try {
+      const docRef = doc(db, 'patient_documents', id);
+      await deleteDoc(docRef);
+    } catch (err) {
+      console.error("Error deleting patient document:", err);
+      handleFirestoreError(err, OperationType.DELETE, `patient_documents/${id}`);
+    }
+  },
+
+  // Upload any clinical file/blob to Firebase Storage under the patient's folder
+  async uploadDocumentFile(
+    patientId: string,
+    file: File | Blob,
+    originalName: string,
+    onProgress?: (progress: number) => void
+  ): Promise<{ downloadURL: string; storagePath: string }> {
+    // Sanitize the filename to prevent issues with special characters
+    const sanitizedName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const storagePath = `patients/${patientId}/documents/${Date.now()}_${sanitizedName}`;
+    const fileRef = ref(storage, storagePath);
+    const uploadTask = uploadBytesResumable(fileRef, file);
+
+    return new Promise((resolve, reject) => {
+      uploadTask.on(
+        'state_changed',
+        (snapshot) => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          if (onProgress) {
+            onProgress(Math.round(progress));
+          }
+        },
+        (error) => {
+          console.error("Storage upload of document failed:", error);
+          reject(error);
+        },
+        async () => {
+          try {
+            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+            resolve({ downloadURL, storagePath });
+          } catch (urlError) {
+            reject(urlError);
+          }
+        }
+      );
+    });
+  },
+
+  async deleteDocumentFile(storagePath: string): Promise<void> {
+    try {
+      const fileRef = ref(storage, storagePath);
+      await deleteObject(fileRef);
+    } catch (err) {
+      console.error("Error deleting document file from storage:", err);
     }
   }
 };

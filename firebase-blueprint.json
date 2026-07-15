@@ -97,6 +97,28 @@
         "createdAt": { "type": "number" }
       },
       "required": ["name", "createdAt"]
+    },
+    "PatientDocument": {
+      "title": "PatientDocument",
+      "description": "Documentos e anexos clínicos associados à pasta de cada paciente.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "patientId": { "type": "string" },
+        "category": { "type": "string" },
+        "fileName": { "type": "string" },
+        "originalName": { "type": "string" },
+        "storagePath": { "type": "string" },
+        "downloadURL": { "type": "string" },
+        "fileType": { "type": "string" },
+        "fileSize": { "type": "number" },
+        "uploadedBy": { "type": "string" },
+        "uploadedAt": { "type": "number" },
+        "description": { "type": "string" },
+        "tags": { "type": "array" },
+        "linkedRecordIds": { "type": "array" }
+      },
+      "required": ["patientId", "category", "fileName", "originalName", "storagePath", "downloadURL", "fileType", "fileSize", "uploadedBy", "uploadedAt"]
     }
   },
   "firestore": {
@@ -123,6 +145,10 @@
     "/patients/{documentId}": {
       "schema": "Patient",
       "description": "Prontuário completo, histórico e recibos de finanças dos pacientes."
+    },
+    "/patient_documents/{documentId}": {
+      "schema": "PatientDocument",
+      "description": "Pasta de documentos, contratos e receitas dos pacientes."
     }
   }
 }

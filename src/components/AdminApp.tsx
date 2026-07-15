@@ -20,6 +20,8 @@ import {
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, updateDoc, collection, getDocs, deleteDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
+import MediaManager from './MediaManager';
+import { PatientManager } from './admin/PatientManager';
 
 const ADMIN_EMAILS = [
   'd-briciod2@hotmail.com',
@@ -75,6 +77,17 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
   // Admin Verification States
   const [dbAdminDoc, setDbAdminDoc] = useState<any>(null);
   const [isAdminChecking, setIsAdminChecking] = useState(true);
+  const [prevUserUid, setPrevUserUid] = useState<string | null>(null);
+
+  if (user && user.uid !== prevUserUid) {
+    setPrevUserUid(user.uid);
+    setIsAdminChecking(true);
+    setDbAdminDoc(null);
+  } else if (!user && prevUserUid !== null) {
+    setPrevUserUid(null);
+    setIsAdminChecking(false);
+    setDbAdminDoc(null);
+  }
 
   // Auto setup states
   const [setupStatus, setSetupStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
@@ -1275,6 +1288,16 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
     );
   }
 
+  // WHILE VERIFYING ADMIN PERMISSIONS
+  if (isAdminChecking) {
+    return (
+      <div className="min-h-screen bg-sand-50 flex flex-col items-center justify-center">
+        <RefreshCw className="animate-spin text-softblue-600 mb-4" size={32} />
+        <span className="text-sm font-mono text-sand-600 font-semibold uppercase tracking-wider">Verificando permissões de acesso...</span>
+      </div>
+    );
+  }
+
   // LOGGED IN BUT NOT AUTHORIZED (NOT ADMIN)
   if (!isAdmin) {
     return (
@@ -1361,7 +1384,7 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
             {[
               { id: 'dashboard', label: 'Dashboard', icon: <Sparkles size={15} /> },
               { id: 'perfil', label: 'Perfil Clínico', icon: <User size={15} /> },
-              { id: 'fotos', label: 'Gerenciador de Fotos', icon: <ImageIcon size={15} /> },
+              { id: 'fotos', label: 'Mídia', icon: <ImageIcon size={15} /> },
               { id: 'agenda', label: 'Agenda & Calendário', icon: <Calendar size={15} /> },
               { id: 'pacientes', label: 'Pacientes & Prontuários', icon: <Users size={15} /> },
               { id: 'mensagens', label: 'Caixa de Mensagens', icon: <Inbox size={15} /> },
@@ -1420,9 +1443,9 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
               <div className="flex items-center gap-2 text-xs font-mono text-sand-500 font-bold uppercase tracking-wider">
                 <span>Painel</span>
                 <ChevronRight size={10} />
-                <span className="text-softblue-600">{activeTab}</span>
+                <span className="text-softblue-600">{activeTab === 'fotos' ? 'mídia' : activeTab}</span>
               </div>
-              <h2 className="text-2xl font-serif font-bold text-sand-950 mt-1 capitalize">{activeTab}</h2>
+              <h2 className="text-2xl font-serif font-bold text-sand-950 mt-1 capitalize">{activeTab === 'fotos' ? 'mídia' : activeTab}</h2>
             </div>
 
             <div className="flex items-center gap-2">
@@ -1827,153 +1850,19 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
               </motion.div>
             )}
 
-            {/* 3. GERENCIADOR DE FOTOS */}
+            {/* 3. EXCLUSIVO MÓDULO DE MÍDIA */}
             {activeTab === 'fotos' && (
               <motion.div
-                key="tab-fotos"
+                key="tab-midia"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="space-y-6"
               >
-                <div className="bg-dusty-50/50 rounded-2xl p-6 border border-dusty-100 max-w-4xl">
-                  <h3 className="text-sm font-serif font-bold text-sand-950 flex items-center gap-1.5">
-                    <Sparkles size={16} className="text-dusty-600" /> Galeria de Imagens & Fotos Clínicas
-                  </h3>
-                  <p className="text-xs text-sand-700 leading-relaxed mt-1">
-                    As fotos do site são armazenadas com segurança no Firebase Storage. Selecione uma nova foto para visualizar uma prévia local. Após confirmar, o arquivo será enviado ao Storage e a URL pública será atualizada no banco de dados Firestore, refletindo instantaneamente na Landing Page.
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl">
-                  {[
-                    { key: 'hero', label: 'Foto Principal (Hero)', section: 'Topo da Página', url: siteContent.psychologist_info.heroImageUrl, desc: 'Exibida na abertura do site.' },
-                    { key: 'about', label: 'Foto da Biografia', section: 'Seção Sobre Mim', url: siteContent.psychologist_info.aboutImageUrl, desc: 'Apresentação profissional e retrato.' },
-                    { key: 'logo', label: 'Logotipo Oficial', section: 'Identidade Visual', url: siteContent.psychologist_info.logoUrl, desc: 'Exibido no cabeçalho/navbar.', objectFit: 'object-contain' }
-                  ].map((imgItem) => {
-                    const hasLocalPreview = !!previewUrls[imgItem.key];
-                    const displayUrl = previewUrls[imgItem.key] || imgItem.url;
-                    const progress = uploadProgress[imgItem.key] || 0;
-                    const statusText = uploadStatus[imgItem.key] || '';
-                    const isLoading = !!uploadLoading[imgItem.key];
-
-                    return (
-                      <div key={imgItem.key} className="bg-white p-5 rounded-2xl border border-sand-200 shadow-sm flex flex-col justify-between space-y-4 relative">
-                        <div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-[9px] font-mono font-bold uppercase text-sand-500 bg-sand-100 px-2 py-0.5 rounded">{imgItem.section}</span>
-                            {hasLocalPreview && (
-                              <span className="text-[9px] font-mono font-bold uppercase text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded animate-pulse">Prévia</span>
-                            )}
-                          </div>
-                          <h4 className="text-xs font-bold text-sand-950 mt-2 font-serif">{imgItem.label}</h4>
-                          <p className="text-[11px] text-sand-500 mt-1">{imgItem.desc}</p>
-                        </div>
-
-                        <div className="aspect-[4/5] w-full rounded-xl bg-sand-50/50 border border-dashed border-sand-200 overflow-hidden relative flex items-center justify-center p-2.5">
-                          {displayUrl ? (
-                            <img
-                              src={displayUrl}
-                              alt={imgItem.label}
-                              className={`w-full h-full rounded-lg ${imgItem.objectFit || 'object-cover'} transition-all`}
-                              referrerPolicy="no-referrer"
-                            />
-                          ) : (
-                            <span className="text-[10px] font-mono text-sand-400">Nenhuma imagem personalizada</span>
-                          )}
-
-                          {isLoading && (
-                            <div className="absolute inset-0 bg-white/90 flex flex-col items-center justify-center p-4 space-y-2">
-                              <RefreshCw className="animate-spin text-dusty-600" size={24} />
-                              <span className="text-[10px] font-bold text-sand-700 font-mono">{progress}%</span>
-                              <div className="w-24 bg-sand-100 rounded-full h-1.5 overflow-hidden">
-                                <div className="bg-dusty-600 h-full" style={{ width: `${progress}%` }} />
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="space-y-3">
-                          {statusText && (
-                            <div className={`p-2 rounded-lg text-center text-[10px] font-bold uppercase font-mono border ${
-                              statusText.includes('sucesso') 
-                                ? 'bg-emerald-50 border-emerald-200 text-emerald-800' 
-                                : statusText.includes('Erro') || statusText.includes('Falha')
-                                  ? 'bg-rose-50 border-rose-200 text-rose-800'
-                                  : 'bg-sand-50 border-sand-200 text-sand-800'
-                            }`}>
-                              {statusText}
-                            </div>
-                          )}
-
-                          {/* Progress bar displayed below if loaded outside overlay */}
-                          {!isLoading && progress > 0 && progress < 100 && (
-                            <div className="space-y-1">
-                              <div className="flex justify-between text-[9px] text-sand-500 font-mono">
-                                <span>Progresso</span>
-                                <span>{progress}%</span>
-                              </div>
-                              <div className="w-full bg-sand-100 rounded-full h-1.5 overflow-hidden">
-                                <div className="bg-dusty-600 h-full transition-all" style={{ width: `${progress}%` }} />
-                              </div>
-                            </div>
-                          )}
-                          
-                          <div className="flex flex-col gap-2">
-                            {hasLocalPreview ? (
-                              <div className="flex gap-2 w-full">
-                                <button
-                                  type="button"
-                                  onClick={() => handleConfirmImageUpload(imgItem.key as any)}
-                                  disabled={isLoading}
-                                  className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer shadow-sm transition-all"
-                                >
-                                  <Save size={12} />
-                                  <span>Confirmar</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleCancelImageSelection(imgItem.key as any)}
-                                  disabled={isLoading}
-                                  className="py-2 px-3 bg-sand-100 hover:bg-sand-200 disabled:opacity-50 text-sand-700 rounded-xl text-[11px] font-bold uppercase flex items-center justify-center gap-1.5 cursor-pointer transition-all border border-sand-200"
-                                >
-                                  <span>Cancelar</span>
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="flex gap-2">
-                                <label className="flex-1 py-2 bg-dusty-600 hover:bg-dusty-700 text-white rounded-xl text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer shadow-sm transition-all">
-                                  <Upload size={12} />
-                                  <span>Selecionar</span>
-                                  <input
-                                    type="file"
-                                    accept="image/*"
-                                    className="hidden"
-                                    onChange={(e) => {
-                                      if (e.target.files && e.target.files[0]) {
-                                        handleSelectImageForUpload(imgItem.key as any, e.target.files[0]);
-                                      }
-                                    }}
-                                  />
-                                </label>
-                                {imgItem.url && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleClearImage(imgItem.key as any)}
-                                    className="p-2 border border-sand-200 hover:bg-rose-50 text-rose-600 rounded-xl cursor-pointer"
-                                    title="Remover Imagem"
-                                  >
-                                    <Trash2 size={14} />
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                <MediaManager 
+                  user={user} 
+                  dbAdminDoc={dbAdminDoc} 
+                  setDbAdminDoc={setDbAdminDoc} 
+                />
               </motion.div>
             )}
 
@@ -2381,385 +2270,12 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="grid grid-cols-1 lg:grid-cols-12 gap-6"
+                className="space-y-6"
               >
-                {/* Left side list of patients */}
-                <div className="lg:col-span-4 bg-white p-6 rounded-2xl border border-sand-200 shadow-sm space-y-4 h-fit">
-                  <div className="flex items-center justify-between gap-4">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-sand-900 font-mono">Lista de Pacientes</h3>
-                    <button
-                      onClick={() => {
-                        setEditingPatient(null);
-                        setPatientForm({ name: '', email: '', phone: '', cpf: '', dateOfBirth: '', address: '', notes: '', history: '' });
-                        setIsPatientModalOpen(true);
-                      }}
-                      className="p-1.5 bg-sage-50 text-sage-700 hover:bg-sage-100 border border-sage-200 rounded-lg flex items-center gap-1 text-xs font-bold cursor-pointer"
-                    >
-                      <PlusCircle size={14} />
-                      <span className="hidden sm:inline">Adicionar</span>
-                    </button>
-                  </div>
-
-                  <div className="relative">
-                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-sand-400" />
-                    <input
-                      type="text"
-                      placeholder="Pesquisar pacientes..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full pl-9 pr-4 py-2 text-xs rounded-xl border border-sand-200 focus:outline-none"
-                    />
-                  </div>
-
-                  <div className="divide-y divide-sand-100 max-h-[450px] overflow-y-auto pr-2">
-                    {patients
-                      .filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()))
-                      .map((pt) => (
-                        <div
-                          key={pt.id}
-                          onClick={() => setSelectedPatient(pt)}
-                          className={`py-3 px-3 rounded-xl text-left cursor-pointer transition-colors ${
-                            selectedPatient?.id === pt.id ? 'bg-sage-50/50 border border-sage-200/50' : 'hover:bg-sand-50/50'
-                          }`}
-                        >
-                          <p className="text-xs font-bold text-sand-950">{pt.name}</p>
-                          <p className="text-[10px] text-sand-500 font-mono mt-0.5">{pt.phone}</p>
-                        </div>
-                      ))}
-                    {patients.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase())).length === 0 && (
-                      <div className="py-8 text-center text-xs text-sand-400 font-mono uppercase">
-                        Nenhum paciente cadastrado.
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Right side detailed Profile */}
-                <div className="lg:col-span-8 space-y-6">
-                  {selectedPatient ? (
-                    <div className="bg-white p-8 rounded-3xl border border-sand-200/60 shadow-sm space-y-6">
-                      
-                      {/* Name, core details */}
-                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 border-b border-sand-100 pb-5">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                            <h3 className="text-xl font-serif font-bold text-sand-950">{selectedPatient.name}</h3>
-                          </div>
-                          <p className="text-[10px] text-sand-500 font-mono mt-1 font-semibold uppercase tracking-widest">Prontuário Ativo • ID: {selectedPatient.id.substring(0, 8).toUpperCase()}</p>
-                        </div>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => {
-                              setEditingPatient(selectedPatient);
-                              setPatientForm({
-                                name: selectedPatient.name,
-                                email: selectedPatient.email,
-                                phone: selectedPatient.phone,
-                                cpf: selectedPatient.cpf || '',
-                                dateOfBirth: selectedPatient.dateOfBirth || '',
-                                address: selectedPatient.address || '',
-                                notes: selectedPatient.notes || '',
-                                history: selectedPatient.history || ''
-                              });
-                              setIsPatientModalOpen(true);
-                            }}
-                            className="px-3.5 py-1.5 border border-sand-200 hover:bg-sand-50 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-                          >
-                            <Edit3 size={13} />
-                            <span>Editar cadastro</span>
-                          </button>
-                          <button
-                            onClick={() => handleDeletePatient(selectedPatient.id)}
-                            className="px-3.5 py-1.5 border border-rose-100 hover:bg-rose-50 text-rose-600 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-                          >
-                            <Trash2 size={13} />
-                            <span>Excluir</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Clinical Sub-Tabs Navigation */}
-                      <div className="flex flex-wrap border-b border-sand-100 gap-1.5 pb-0.5">
-                        {[
-                          { id: 'evolucao', label: 'Evolução Clínica', icon: <FileText size={14} /> },
-                          { id: 'historico', label: 'Histórico Clínico', icon: <User size={14} /> },
-                          { id: 'pagamentos', label: 'Histórico de Consultas', icon: <Calendar size={14} /> },
-                          { id: 'recibos', label: 'Recibos & Financeiro', icon: <CreditCard size={14} /> },
-                          { id: 'observacoes', label: 'Observações Privadas', icon: <Lock size={14} /> }
-                        ].map((subTab) => (
-                          <button
-                            key={subTab.id}
-                            onClick={() => setPatientSubTab(subTab.id as any)}
-                            className={`px-4 py-2 rounded-t-xl text-xs font-semibold flex items-center gap-2 border-b-2 cursor-pointer transition-all ${
-                              patientSubTab === subTab.id
-                                ? 'border-softblue-500 text-softblue-700 bg-softblue-50/30'
-                                : 'border-transparent text-sand-600 hover:text-sand-950 hover:bg-sand-50/50'
-                            }`}
-                          >
-                            {subTab.icon}
-                            <span>{subTab.label}</span>
-                          </button>
-                        ))}
-                      </div>
-
-                      {/* Tab Content Panels */}
-                      <div className="pt-2">
-                        
-                        {/* A. Evolução Clínica (Prontuário) */}
-                        {patientSubTab === 'evolucao' && (
-                          <div className="space-y-6">
-                            <div className="flex items-center justify-between">
-                              <h4 className="text-xs font-bold uppercase text-sand-900 tracking-wider font-mono">Linha do Tempo de Sessões</h4>
-                              <span className="text-[10px] font-mono bg-softblue-50 text-softblue-700 border border-softblue-100 px-2.5 py-0.5 rounded font-bold uppercase">
-                                Documento Protegido (CFP)
-                              </span>
-                            </div>
-
-                            {/* Add evolution entry block */}
-                            <div className="bg-sand-50/40 p-4 rounded-2xl border border-sand-200/70 space-y-3">
-                              <span className="text-[10px] font-bold text-sand-700 uppercase font-mono block">Nova Entrada de Evolução Clínica</span>
-                              <textarea
-                                value={evolutionInput}
-                                onChange={(e) => setEvolutionInput(e.target.value)}
-                                placeholder="Descreva os pontos abordados, sintomas relatados, tarefas de casa ou observações sobre o progresso terapêutico do paciente nesta sessão..."
-                                className="w-full bg-white border border-sand-200 rounded-xl p-3 text-xs focus:outline-none min-h-[80px]"
-                              />
-                              <div className="flex justify-between items-center">
-                                <p className="text-[10px] text-sand-500 leading-normal">
-                                  Esta entrada será salva com a data de hoje ({new Date().toLocaleDateString('pt-BR')}) no histórico do paciente.
-                                </p>
-                                <button
-                                  type="button"
-                                  onClick={async () => {
-                                    if (!evolutionInput.trim()) return;
-                                    const datePrefix = `[${new Date().toLocaleDateString('pt-BR')}]`;
-                                    const entry = `${datePrefix} ${evolutionInput.trim()}`;
-                                    const updatedHistory = selectedPatient.history 
-                                      ? `${entry}\n\n${selectedPatient.history}` 
-                                      : entry;
-
-                                    try {
-                                      setGlobalLoading(true);
-                                      await contentService.updatePatient(selectedPatient.id, { history: updatedHistory });
-                                      const updatedPatientObj = { ...selectedPatient, history: updatedHistory };
-                                      setSelectedPatient(updatedPatientObj);
-                                      setPatients(prev => prev.map(p => p.id === selectedPatient.id ? updatedPatientObj : p));
-                                      setEvolutionInput('');
-                                    } catch (err) {
-                                      console.error("Erro ao salvar evolução:", err);
-                                      alert("Erro ao salvar evolução clínica. Tente novamente.");
-                                    } finally {
-                                      setGlobalLoading(false);
-                                    }
-                                  }}
-                                  className="px-4 py-2 bg-softblue-600 hover:bg-softblue-700 text-white rounded-lg text-xs font-bold uppercase tracking-wider cursor-pointer transition-colors"
-                                >
-                                  Salvar Entrada
-                                </button>
-                              </div>
-                            </div>
-
-                            {/* Clinical History Display */}
-                            <div className="space-y-4">
-                              {selectedPatient.history ? (
-                                <div className="divide-y divide-sand-100 max-h-[300px] overflow-y-auto pr-2">
-                                  {selectedPatient.history.split('\n\n').map((block, index) => {
-                                    // Parse date if blocks start with [DD/MM/YYYY]
-                                    const dateMatch = block.match(/^\[(\d{2}\/\d{2}\/\d{4})\]/);
-                                    const dateText = dateMatch ? dateMatch[1] : 'Evolução';
-                                    const textContent = dateMatch ? block.replace(/^\[\d{2}\/\d{2}\/\d{4}\]\s*/, '') : block;
-
-                                    return (
-                                      <div key={index} className="py-4 first:pt-0 last:pb-0 space-y-1.5">
-                                        <div className="flex items-center gap-2">
-                                          <span className="h-2 w-2 rounded-full bg-softblue-400" />
-                                          <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-softblue-600 bg-softblue-50 px-2 py-0.5 rounded">
-                                            Sessão • {dateText}
-                                          </span>
-                                        </div>
-                                        <p className="text-xs text-sand-800 leading-relaxed font-mono whitespace-pre-wrap pl-4">
-                                          {textContent}
-                                        </p>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              ) : (
-                                <div className="py-12 text-center border border-dashed border-sand-200 rounded-2xl text-sand-500 text-xs">
-                                  Nenhuma anotação de evolução clínica registrada para este paciente ainda. Use o campo acima para salvar o primeiro relato.
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* B. Histórico Clínico (Personal Records) */}
-                        {patientSubTab === 'historico' && (
-                          <div className="space-y-4">
-                            <h4 className="text-xs font-bold uppercase text-sand-900 tracking-wider font-mono mb-2">Dados Cadastrais do Paciente</h4>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                              <div className="p-4 bg-sand-50/30 rounded-2xl border border-sand-100/60">
-                                <p className="text-[10px] font-bold text-sand-500 uppercase tracking-wider font-mono">Nome Completo</p>
-                                <p className="font-semibold text-sand-950 mt-1 text-sm">{selectedPatient.name}</p>
-                              </div>
-                              <div className="p-4 bg-sand-50/30 rounded-2xl border border-sand-100/60">
-                                <p className="text-[10px] font-bold text-sand-500 uppercase tracking-wider font-mono">Endereço Residencial</p>
-                                <p className="font-semibold text-sand-950 mt-1">{selectedPatient.address || 'Não cadastrado'}</p>
-                              </div>
-                              <div className="p-4 bg-sand-50/30 rounded-2xl border border-sand-100/60">
-                                <p className="text-[10px] font-bold text-sand-500 uppercase tracking-wider font-mono">Contato de WhatsApp</p>
-                                <p className="font-semibold text-sand-950 mt-1">{selectedPatient.phone}</p>
-                              </div>
-                              <div className="p-4 bg-sand-50/30 rounded-2xl border border-sand-100/60">
-                                <p className="text-[10px] font-bold text-sand-500 uppercase tracking-wider font-mono">E-mail de Cadastro</p>
-                                <p className="font-semibold text-sand-950 mt-1 truncate" title={selectedPatient.email}>{selectedPatient.email}</p>
-                              </div>
-                              <div className="p-4 bg-sand-50/30 rounded-2xl border border-sand-100/60">
-                                <p className="text-[10px] font-bold text-sand-500 uppercase tracking-wider font-mono">CPF</p>
-                                <p className="font-semibold text-sand-950 mt-1">{selectedPatient.cpf || 'Não cadastrado'}</p>
-                              </div>
-                              <div className="p-4 bg-sand-50/30 rounded-2xl border border-sand-100/60">
-                                <p className="text-[10px] font-bold text-sand-500 uppercase tracking-wider font-mono">Data de Nascimento</p>
-                                <p className="font-semibold text-sand-950 mt-1">{selectedPatient.dateOfBirth || 'Não informada'}</p>
-                              </div>
-                              <div className="p-4 bg-sand-50/30 rounded-2xl border border-sand-100/60 sm:col-span-2 flex items-center justify-between">
-                                <div>
-                                  <p className="text-[10px] font-bold text-sand-500 uppercase tracking-wider font-mono">Data de Registro no Sistema</p>
-                                  <p className="font-semibold text-sand-950 mt-0.5">
-                                    {selectedPatient.createdAt ? new Date(selectedPatient.createdAt).toLocaleDateString('pt-BR') : '--/--/----'}
-                                  </p>
-                                </div>
-                                <span className="text-[9px] font-mono bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded font-bold uppercase">
-                                  Cadastro Ativo
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* C. Histórico de Consultas (Financial appointments matching) */}
-                        {patientSubTab === 'pagamentos' && (() => {
-                          const patientAppts = appointments.filter(a => 
-                            a.patientEmail === selectedPatient.email || 
-                            a.patientPhone === selectedPatient.phone ||
-                            a.patientName.toLowerCase().includes(selectedPatient.name.toLowerCase())
-                          );
-
-                          return (
-                            <div className="space-y-4">
-                              <h4 className="text-xs font-bold uppercase text-sand-900 tracking-wider font-mono">Histórico de Sessões Agendadas</h4>
-                              <div className="divide-y divide-sand-100 max-h-[300px] overflow-y-auto pr-2">
-                                {patientAppts.length > 0 ? (
-                                  patientAppts.map((appt) => (
-                                    <div key={appt.id} className="py-3.5 flex items-center justify-between gap-4">
-                                      <div>
-                                        <p className="text-xs font-bold text-sand-950">{appt.serviceTitle}</p>
-                                        <p className="text-[10px] font-mono text-sand-500 mt-1">
-                                          Realizado em {getDayString(appt.date)} às {appt.timeSlot}
-                                        </p>
-                                      </div>
-                                      <div className="text-right flex items-center gap-3">
-                                        <span className="text-xs font-bold text-sand-950 font-mono">
-                                          {formatMoney(appt.amount || 150)}
-                                        </span>
-                                        <span className={`inline-flex px-2 py-0.5 rounded-md text-[9px] font-mono font-bold uppercase ${
-                                          appt.status === 'confirmed'
-                                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
-                                            : appt.status === 'pending_payment'
-                                            ? 'bg-amber-50 text-amber-700 border border-amber-100'
-                                            : 'bg-sand-100 text-sand-600 border border-sand-200'
-                                        }`}>
-                                          {appt.status === 'confirmed' ? 'Confirmada' : appt.status === 'pending_payment' ? 'Aguardando Pix' : 'Cancelada'}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  ))
-                                ) : (
-                                  <div className="py-12 text-center text-sand-500 text-xs">
-                                    Nenhum agendamento encontrado para os canais de contato cadastrados deste paciente.
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })()}
-
-                        {/* D. Recibos Clínicos (Receipts) */}
-                        {patientSubTab === 'recibos' && (
-                          <div className="space-y-4">
-                            <div className="flex items-center justify-between">
-                              <h4 className="text-xs font-bold uppercase text-sand-900 tracking-wider font-mono">Recibos e Cobranças Clínicas</h4>
-                              <button
-                                onClick={() => setIsReceiptModalOpen(true)}
-                                className="px-3.5 py-1.5 bg-softblue-500 text-white hover:bg-softblue-600 rounded-xl text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
-                              >
-                                <Plus size={12} />
-                                <span>Emitir Recibo</span>
-                              </button>
-                            </div>
-
-                            <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2">
-                              {(selectedPatient.recibos || []).length > 0 ? (
-                                (selectedPatient.recibos || []).map((recibo) => (
-                                  <div key={recibo.id} className="p-3.5 bg-sand-50/40 rounded-xl border border-sand-150 flex items-center justify-between text-xs gap-4 font-mono">
-                                    <div>
-                                      <p className="font-bold text-sand-900">{recibo.description}</p>
-                                      <p className="text-[10px] text-sand-500 mt-0.5">{getDayString(recibo.date)}</p>
-                                    </div>
-                                    <div className="flex items-center gap-3">
-                                      <span className="font-bold text-softblue-700">{formatMoney(recibo.amount)}</span>
-                                      <button
-                                        onClick={() => handleDeleteReceipt(recibo.id)}
-                                        className="p-1 hover:bg-rose-50 text-rose-600 rounded cursor-pointer transition-colors"
-                                        title="Excluir recibo"
-                                      >
-                                        <Trash2 size={13} />
-                                      </button>
-                                    </div>
-                                  </div>
-                                ))
-                              ) : (
-                                <div className="py-12 text-center border border-dashed border-sand-200 rounded-2xl text-sand-500 text-xs">
-                                  Nenhum recibo clínico emitido ainda para este paciente. Use o botão acima para gerar um recibo formal em formato PDF/Impressão.
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* E. Observações Privadas (Private Notes) */}
-                        {patientSubTab === 'observacoes' && (
-                          <div className="space-y-4">
-                            <div className="flex items-center justify-between">
-                              <h4 className="text-xs font-bold uppercase text-sand-900 tracking-wider font-mono">Anotações Clínicas Privadas</h4>
-                              <span className="text-[9px] font-mono bg-rose-50 text-rose-700 border border-rose-100 px-2 py-0.5 rounded font-bold uppercase flex items-center gap-1">
-                                <Lock size={10} />
-                                Apenas Erica Costa
-                              </span>
-                            </div>
-
-                            <p className="text-[11px] text-sand-600 leading-normal">
-                              Estas observações destinam-se exclusivamente ao suporte diagnóstico pessoal do psicólogo. Elas são criptografadas em trânsito e não constam no prontuário oficial compartilhado com o paciente.
-                            </p>
-
-                            <div className="p-4 bg-amber-50/20 rounded-2xl border border-amber-100 text-xs text-sand-700 leading-relaxed font-mono min-h-[120px] whitespace-pre-wrap">
-                              {selectedPatient.notes || 'Nenhuma anotação privada inserida. Você pode editar o cadastro do paciente para adicionar observações confidenciais de suporte terapêutico.'}
-                            </div>
-                          </div>
-                        )}
-
-                      </div>
-
-                    </div>
-                  ) : (
-                    <div className="h-full bg-white p-8 rounded-3xl border border-sand-200/80 shadow-sm flex flex-col items-center justify-center text-center text-sand-500 py-16">
-                      <Users size={36} className="text-sand-300 mb-3" />
-                      <p className="text-sm font-serif font-semibold text-sand-850">Ficha Clínica do Paciente</p>
-                      <p className="text-xs text-sand-500 mt-1 max-w-sm">Selecione um paciente na barra lateral para abrir seu prontuário clínico completo, anotações de evolução e recibos.</p>
-                    </div>
-                  )}
-                </div>
+                <PatientManager 
+                  onPatientsUpdated={(updatedList) => setPatients(updatedList)}
+                  onGlobalLoading={(loading) => setGlobalLoading(loading)}
+                />
               </motion.div>
             )}
 
@@ -3372,25 +2888,18 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
                     <div className="bg-white p-6 rounded-3xl border border-sand-200 shadow-sm text-center space-y-4">
                       <div className="relative inline-block group">
                         <img
-                          src={dbAdminDoc?.photoURL || user?.photoURL || "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?q=80&w=300&auto=format&fit=crop"}
+                          src={dbAdminDoc?.photoURL || dbAdminDoc?.photoUrl || user?.photoURL || "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?q=80&w=300&auto=format&fit=crop"}
                           alt="Foto de Perfil"
                           referrerPolicy="no-referrer"
                           className="w-24 h-24 rounded-2xl object-cover mx-auto border border-sand-200 bg-sand-50 shadow-sm"
                         />
-                        <label className="absolute -bottom-1.5 -right-1.5 p-1.5 bg-sage-600 hover:bg-sage-700 text-white rounded-lg shadow-sm cursor-pointer transition-all">
-                          <Upload size={14} />
-                          <input
-                            type="file"
-                            accept="image/*"
-                            className="hidden"
-                            onChange={(e) => {
-                              const file = e.target.files?.[0];
-                              if (file) {
-                                handleUpdateProfilePhoto(file);
-                              }
-                            }}
-                          />
-                        </label>
+                        <button
+                          onClick={() => setActiveTab('fotos')}
+                          className="absolute -bottom-1.5 -right-1.5 p-1.5 bg-softblue-500 hover:bg-softblue-600 text-white rounded-lg shadow-sm cursor-pointer border border-white transition-all animate-pulse"
+                          title="Gerenciar no Módulo de Mídia"
+                        >
+                          <ImageIcon size={14} />
+                        </button>
                       </div>
 
                       <div className="space-y-1">

@@ -59,5 +59,15 @@ service cloud.firestore {
     match /patients/{document} {
       allow read, write: if isAdmin();
     }
+    
+    // Patient clinical records: strictly private, only authenticated admins can read/write/delete
+    match /patient_records/{document} {
+      allow read, write: if isAdmin();
+    }
+
+    // Patient documents: strictly private, only authenticated admins can read/write/delete
+    match /patient_documents/{document} {
+      allow read, write: if isAdmin();
+    }
   }
 }

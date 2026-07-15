@@ -67,6 +67,16 @@ export interface ContactMessage {
   status: 'pending' | 'responded';
 }
 
+export interface PatientAddress {
+  cep: string;
+  rua: string;
+  numero: string;
+  complemento?: string;
+  bairro: string;
+  cidade: string;
+  estado: string;
+}
+
 export interface Patient {
   id: string;
   name: string;
@@ -84,4 +94,69 @@ export interface Patient {
     amount: number;
     description: string;
   }[];
+
+  // Portuguese fields required for the "patients" collection
+  nome?: string;
+  rg?: string;
+  dataNascimento?: string;
+  sexo?: string;
+  estadoCivil?: string;
+  profissao?: string;
+  telefone?: string;
+  whatsapp?: string;
+  endereco?: PatientAddress;
+  convenio?: string;
+  contatoEmergencia?: string;
+  nomeResponsavel?: string;
+  observacoes?: string;
+  updatedAt?: number;
+  status?: 'Ativo' | 'Inativo';
+  photoUrl?: string;
 }
+
+export interface PatientRecord {
+  id: string;
+  patientId: string;
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+  sessionDate: string;
+  startTime: string;
+  duration: string;
+  modality: 'Online' | 'Presencial';
+  status: 'Realizada' | 'Cancelada' | 'Remarcada';
+  objective: string;
+  clinicalEvolution: string;
+  observations: string;
+  nextSessionPlan: string;
+  attachments: {
+    name: string;
+    url: string;
+    type: string;
+    size?: number;
+  }[];
+  signature: {
+    signedBy: string;
+    signedAt: number;
+    ip?: string;
+    verified: boolean;
+  };
+}
+
+export interface PatientDocument {
+  id: string;
+  patientId: string;
+  category: string;
+  fileName: string;
+  originalName: string;
+  storagePath: string;
+  downloadURL: string;
+  fileType: string;
+  fileSize: number;
+  uploadedBy: string;
+  uploadedAt: number;
+  description: string;
+  tags: string[];
+  linkedRecordIds?: string[]; // structure prepared for clinical records
+}
+
