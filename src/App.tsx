@@ -32,7 +32,7 @@ export default function App() {
 
   // Determine rendering based on path
   if (currentPath.startsWith('/admin')) {
-    return <AdminApp navigate={navigate} />;
+    return <AdminApp key={currentPath} navigate={navigate} currentPath={currentPath} />;
   }
 
   return (

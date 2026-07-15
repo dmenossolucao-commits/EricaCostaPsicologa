@@ -29,14 +29,27 @@ const ADMIN_EMAILS = [
 
 interface AdminAppProps {
   navigate: (to: string) => void;
+  currentPath: string;
+  key?: string;
 }
 
-export default function AdminApp({ navigate }: AdminAppProps) {
+export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
   const { siteContent, blogPosts, user, loading: contextLoading, refreshContent, refreshBlog, logout, updateSiteContent, updateBlogPosts } = useSiteContent();
+
+  const getActiveTabFromPath = (path: string) => {
+    if (path.startsWith('/admin/')) {
+      const subPath = path.substring(7); // '/admin/' has 7 characters
+      const validTabs = ['dashboard', 'perfil', 'fotos', 'agenda', 'pacientes', 'mensagens', 'blog', 'pagamentos', 'configuracoes', 'minhaconta'];
+      if (validTabs.includes(subPath)) {
+        return subPath as 'dashboard' | 'perfil' | 'fotos' | 'agenda' | 'pacientes' | 'mensagens' | 'blog' | 'pagamentos' | 'configuracoes' | 'minhaconta';
+      }
+    }
+    return 'dashboard';
+  };
 
   const [activeTab, setActiveTab] = useState<
     'dashboard' | 'perfil' | 'fotos' | 'agenda' | 'pacientes' | 'mensagens' | 'blog' | 'pagamentos' | 'configuracoes' | 'minhaconta'
-  >('dashboard');
+  >(() => getActiveTabFromPath(currentPath));
 
   const handleTabClick = (tabId: string) => {
     navigate('/admin/' + tabId);
@@ -44,7 +57,7 @@ export default function AdminApp({ navigate }: AdminAppProps) {
 
   useEffect(() => {
     const handlePathToTab = () => {
-      const path = window.location.pathname;
+      const path = currentPath;
       if (path.startsWith('/admin/')) {
         const subPath = path.substring(7); // '/admin/' has 7 characters
         const validTabs = ['dashboard', 'perfil', 'fotos', 'agenda', 'pacientes', 'mensagens', 'blog', 'pagamentos', 'configuracoes', 'minhaconta'];
@@ -57,14 +70,7 @@ export default function AdminApp({ navigate }: AdminAppProps) {
     };
 
     handlePathToTab();
-    window.addEventListener('popstate', handlePathToTab);
-    window.addEventListener('navigate', handlePathToTab);
-
-    return () => {
-      window.removeEventListener('popstate', handlePathToTab);
-      window.removeEventListener('navigate', handlePathToTab);
-    };
-  }, []);
+  }, [currentPath]);
 
   // Admin Verification States
   const [dbAdminDoc, setDbAdminDoc] = useState<any>(null);

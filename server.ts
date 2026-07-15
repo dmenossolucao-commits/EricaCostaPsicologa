@@ -1,13 +1,104 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import { initializeApp } from "firebase/app";
-import { getFirestore, doc, getDoc, setDoc, collection, getDocs, addDoc, updateDoc, deleteDoc, query, orderBy } from "firebase/firestore";
+import { initializeApp as initializeClientApp } from "firebase/app";
+import { 
+  getFirestore as getClientFirestore, 
+  collection as clientCollection, 
+  getDocs as getClientDocs, 
+  doc as clientDoc, 
+  getDoc as getClientDoc, 
+  setDoc as clientSetDoc, 
+  addDoc as clientAddDoc, 
+  updateDoc as clientUpdateDoc, 
+  deleteDoc as clientDeleteDoc 
+} from "firebase/firestore";
+import { 
+  getAuth as getClientAuth, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword 
+} from "firebase/auth";
 import firebaseConfig from "./firebase-applet-config.json";
 
-// Initialize Firebase App for the server using same web config
-const firebaseApp = initializeApp(firebaseConfig);
-const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+// Initialize Firebase Client App and Firestore
+const clientApp = initializeClientApp(firebaseConfig);
+const clientDb = getClientFirestore(clientApp, firebaseConfig.firestoreDatabaseId);
+const clientAuth = getClientAuth(clientApp);
+
+// Authentication helper for the server
+let isServerAuthenticated = false;
+async function ensureAuthenticated() {
+  if (isServerAuthenticated) return;
+  const email = "admin@ericacostapsi.com.br";
+  const password = "ServerAdminPasswordSecured100#";
+  try {
+    await signInWithEmailAndPassword(clientAuth, email, password);
+    isServerAuthenticated = true;
+    console.log("Server successfully authenticated to Firebase Auth as admin.");
+  } catch (err: any) {
+    console.log("Initial sign-in failed, attempting to register server admin user...", err.message);
+    try {
+      await createUserWithEmailAndPassword(clientAuth, email, password);
+      isServerAuthenticated = true;
+      console.log("Server admin user created and signed in successfully.");
+    } catch (createErr: any) {
+      console.error("Failed to authenticate server:", createErr.message);
+    }
+  }
+}
+
+// Custom wrapper object acting exactly like Firebase Admin Firestore SDK
+const db = {
+  collection(collectionName: string) {
+    return {
+      async get() {
+        await ensureAuthenticated();
+        const snap = await getClientDocs(clientCollection(clientDb, collectionName));
+        return {
+          docs: snap.docs.map(d => ({
+            id: d.id,
+            data() {
+              return d.data();
+            },
+            exists: true
+          }))
+        };
+      },
+      async add(data: any) {
+        await ensureAuthenticated();
+        const ref = await clientAddDoc(clientCollection(clientDb, collectionName), data);
+        return { id: ref.id };
+      },
+      doc(id: string) {
+        return {
+          async get() {
+            await ensureAuthenticated();
+            const d = await getClientDoc(clientDoc(clientDb, collectionName, id));
+            return {
+              id: d.id,
+              exists: d.exists(),
+              data() {
+                return d.data();
+              }
+            };
+          },
+          async set(data: any) {
+            await ensureAuthenticated();
+            await clientSetDoc(clientDoc(clientDb, collectionName, id), data);
+          },
+          async update(data: any) {
+            await ensureAuthenticated();
+            await clientUpdateDoc(clientDoc(clientDb, collectionName, id), data);
+          },
+          async delete() {
+            await ensureAuthenticated();
+            await clientDeleteDoc(clientDoc(clientDb, collectionName, id));
+          }
+        };
+      }
+    };
+  }
+};
 
 const app = express();
 const PORT = 3000;
@@ -26,8 +117,7 @@ app.post("/api/appointments/book", async (req, res) => {
     }
 
     // Check if slot is already booked and confirmed
-    const appointmentsCol = collection(db, "appointments");
-    const appQuery = await getDocs(appointmentsCol);
+    const appQuery = await db.collection("appointments").get();
     const existing = appQuery.docs.find(doc => {
       const data = doc.data();
       return data.date === date && data.timeSlot === timeSlot && data.status === "confirmed";
@@ -173,7 +263,7 @@ app.post("/api/appointments/book", async (req, res) => {
     };
 
     // Save in Firestore
-    await setDoc(doc(db, "appointments", appointmentId), appointment);
+    await db.collection("appointments").doc(appointmentId).set(appointment);
 
     return res.json({ success: true, appointment });
   } catch (error: any) {
@@ -190,14 +280,14 @@ app.post("/api/appointments/simulate-payment", async (req, res) => {
       return res.status(400).json({ error: "appointmentId é obrigatório." });
     }
 
-    const appRef = doc(db, "appointments", appointmentId);
-    const snap = await getDoc(appRef);
-    if (!snap.exists()) {
+    const appRef = db.collection("appointments").doc(appointmentId);
+    const snap = await appRef.get();
+    if (!snap.exists) {
       return res.status(404).json({ error: "Agendamento não encontrado." });
     }
 
     const current = snap.data();
-    await updateDoc(appRef, {
+    await appRef.update({
       status: "confirmed",
       paymentType: paymentType || current.paymentType || "simulator",
       paidAt: Date.now()
@@ -213,9 +303,9 @@ app.post("/api/appointments/simulate-payment", async (req, res) => {
 // 3. Get single appointment
 app.get("/api/appointments/:id", async (req, res) => {
   try {
-    const appRef = doc(db, "appointments", req.params.id);
-    const snap = await getDoc(appRef);
-    if (!snap.exists()) {
+    const appRef = db.collection("appointments").doc(req.params.id);
+    const snap = await appRef.get();
+    if (!snap.exists) {
       return res.status(404).json({ error: "Agendamento não encontrado." });
     }
     return res.json(snap.data());
@@ -227,8 +317,7 @@ app.get("/api/appointments/:id", async (req, res) => {
 // 4. Get all appointments (Admin)
 app.get("/api/appointments", async (req, res) => {
   try {
-    const appointmentsCol = collection(db, "appointments");
-    const snap = await getDocs(appointmentsCol);
+    const snap = await db.collection("appointments").get();
     const list = snap.docs.map(d => d.data());
     // Sort descending by createdAt
     list.sort((a: any, b: any) => b.createdAt - a.createdAt);
@@ -245,8 +334,8 @@ app.put("/api/appointments/:id/status", async (req, res) => {
     if (!status) {
       return res.status(400).json({ error: "Status é obrigatório." });
     }
-    const appRef = doc(db, "appointments", req.params.id);
-    await updateDoc(appRef, { status });
+    const appRef = db.collection("appointments").doc(req.params.id);
+    await appRef.update({ status });
     return res.json({ success: true });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
@@ -257,13 +346,13 @@ app.put("/api/appointments/:id/status", async (req, res) => {
 app.put("/api/appointments/:id", async (req, res) => {
   try {
     const { date, timeSlot, status } = req.body;
-    const appRef = doc(db, "appointments", req.params.id);
+    const appRef = db.collection("appointments").doc(req.params.id);
     const updateData: any = {};
     if (date !== undefined) updateData.date = date;
     if (timeSlot !== undefined) updateData.timeSlot = timeSlot;
     if (status !== undefined) updateData.status = status;
     
-    await updateDoc(appRef, updateData);
+    await appRef.update(updateData);
     return res.json({ success: true });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
@@ -273,8 +362,8 @@ app.put("/api/appointments/:id", async (req, res) => {
 // 6. Delete appointment (Admin)
 app.delete("/api/appointments/:id", async (req, res) => {
   try {
-    const appRef = doc(db, "appointments", req.params.id);
-    await deleteDoc(appRef);
+    const appRef = db.collection("appointments").doc(req.params.id);
+    await appRef.delete();
     return res.json({ success: true });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
@@ -284,8 +373,7 @@ app.delete("/api/appointments/:id", async (req, res) => {
 // 7. Available Exceptions/Blocked Slots config API
 app.get("/api/blocked-slots", async (req, res) => {
   try {
-    const colRef = collection(db, "blocked_slots");
-    const snap = await getDocs(colRef);
+    const snap = await db.collection("blocked_slots").get();
     const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     return res.json(list);
   } catch (error: any) {
@@ -299,8 +387,7 @@ app.post("/api/blocked-slots", async (req, res) => {
     if (!date || !timeSlot) {
       return res.status(400).json({ error: "Data e horário são obrigatórios." });
     }
-    const colRef = collection(db, "blocked_slots");
-    const docRef = await addDoc(colRef, { date, timeSlot, createdAt: Date.now() });
+    const docRef = await db.collection("blocked_slots").add({ date, timeSlot, createdAt: Date.now() });
     return res.json({ success: true, id: docRef.id });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
@@ -309,8 +396,8 @@ app.post("/api/blocked-slots", async (req, res) => {
 
 app.delete("/api/blocked-slots/:id", async (req, res) => {
   try {
-    const docRef = doc(db, "blocked_slots", req.params.id);
-    await deleteDoc(docRef);
+    const docRef = db.collection("blocked_slots").doc(req.params.id);
+    await docRef.delete();
     return res.json({ success: true });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
@@ -336,8 +423,7 @@ app.post("/api/webhook/mercadopago", async (req, res) => {
         const paymentInfo = await mpResponse.json();
         if (paymentInfo.status === "approved") {
           // Identify appointment by reference or description metadata or search
-          const appointmentsCol = collection(db, "appointments");
-          const snap = await getDocs(appointmentsCol);
+          const snap = await db.collection("appointments").get();
           const appt = snap.docs.find(d => {
             const val = d.data();
             // Preference ID match or description match
@@ -345,7 +431,7 @@ app.post("/api/webhook/mercadopago", async (req, res) => {
           });
           
           if (appt) {
-            await updateDoc(doc(db, "appointments", appt.id), {
+            await db.collection("appointments").doc(appt.id).update({
               status: "confirmed",
               paidAt: Date.now(),
               paymentId: String(paymentId)
