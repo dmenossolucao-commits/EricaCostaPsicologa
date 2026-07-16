@@ -19,14 +19,49 @@ export interface Appointment {
   patientPhone: string;
   date: string; // YYYY-MM-DD
   timeSlot: string; // HH:MM
-  status: 'pending_payment' | 'confirmed' | 'cancelled';
+  status: 'pending_payment' | 'confirmed' | 'cancelled' | 'confirmada' | 'pendente' | 'remarcada' | 'cancelada' | 'nao_compareceu';
   paymentId?: string;
   paymentPreferenceId?: string;
-  paymentType?: 'pix' | 'credit_card' | 'simulator';
+  paymentType?: 'pix' | 'credit_card' | 'simulator' | 'PIX' | 'Cartão' | 'Dinheiro' | 'Transferência';
   amount: number;
   createdAt: number;
   qrCode?: string; // for Pix
   qrCodeBase64?: string; // for Pix
+  patientId?: string;
+  startTime?: string;
+  endTime?: string;
+  duration?: number;
+  modality?: 'Online' | 'Presencial';
+  notes?: string;
+  discount?: number;
+}
+
+export interface FinancialTransaction {
+  id: string;
+  appointmentId?: string;
+  patientId: string;
+  patientName: string;
+  amount: number;
+  date: string; // YYYY-MM-DD
+  discount: number;
+  status: 'Pendente' | 'Pago' | 'Cancelado' | 'Reembolsado';
+  paymentMethod: 'PIX' | 'Cartão' | 'Dinheiro' | 'Transferência';
+  notes?: string;
+  createdAt: number;
+}
+
+export interface Receipt {
+  id: string;
+  patientId: string;
+  patientName: string;
+  psychologistName: string;
+  psychologistCrp?: string;
+  amount: number;
+  date: string; // YYYY-MM-DD
+  paymentMethod: 'PIX' | 'Cartão' | 'Dinheiro' | 'Transferência';
+  signatureVerified: boolean;
+  signedAt?: number;
+  createdAt: number;
 }
 
 export interface BlogPost {
@@ -159,4 +194,38 @@ export interface PatientDocument {
   tags: string[];
   linkedRecordIds?: string[]; // structure prepared for clinical records
 }
+
+export interface AuditLog {
+  id: string;
+  userId: string;
+  email: string;
+  action: 'LOGIN' | 'LOGOUT' | 'UPLOAD' | 'DOWNLOAD' | 'DELETE' | 'UPDATE' | 'PRINT' | 'RESTORE' | 'BACKUP_CREATE' | 'BACKUP_RESTORE' | 'TRASH_RESTORE' | 'TRASH_DELETE';
+  details: string;
+  timestamp: number;
+  ip: string;
+  browser: string;
+  os: string;
+}
+
+export interface DocumentVersion {
+  id: string;
+  documentId: string;
+  collectionName: 'patient_records' | 'patient_documents' | 'blog_posts' | 'site_content';
+  versionNumber: number;
+  updatedAt: number;
+  updatedBy: string;
+  data: any;
+  changes: string;
+}
+
+export interface TrashItem {
+  id: string;
+  originalId: string;
+  originalCollection: 'patients' | 'patient_records' | 'patient_documents' | 'blog_posts' | 'receipts';
+  title: string;
+  deletedAt: number;
+  deletedBy: string;
+  data: any;
+}
+
 

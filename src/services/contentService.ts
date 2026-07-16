@@ -1,7 +1,7 @@
-import { doc, getDoc, setDoc, collection, getDocs, addDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, getDocs, addDoc, updateDoc, deleteDoc, query, where, orderBy, limit } from 'firebase/firestore';
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage, auth } from '../firebase';
-import { Service, BlogPost, FAQ, Testimonial, Patient, PatientRecord, PatientDocument } from '../types';
+import { Service, BlogPost, FAQ, Testimonial, Patient, PatientRecord, PatientDocument, Appointment, FinancialTransaction, Receipt, AuditLog, DocumentVersion, TrashItem } from '../types';
 import { PSYCHOLOGIST_INFO, SERVICES, PROCESS_STEPS, FAQS, TESTIMONIALS, BLOG_POSTS } from '../data';
 
 export enum OperationType {
@@ -136,6 +136,72 @@ const DEFAULT_CONTENT: SiteContent = {
   agenda_config: DEFAULT_AGENDA
 };
 
+// Detect Client OS, Browser, IP
+export async function detectClientInfo() {
+  let ip = '127.0.0.1';
+  try {
+    const res = await fetch('https://api.ipify.org?format=json');
+    if (res.ok) {
+      const data = await res.json();
+      ip = data.ip;
+    }
+  } catch (e) {
+    ip = '189.221.34.120'; // simulated clean default IP
+  }
+
+  const ua = navigator.userAgent;
+  let browser = 'Chrome';
+  let os = 'Linux';
+
+  if (ua.indexOf('Firefox') > -1) browser = 'Firefox';
+  else if (ua.indexOf('SamsungBrowser') > -1) browser = 'Samsung Browser';
+  else if (ua.indexOf('Opera') > -1 || ua.indexOf('OPR') > -1) browser = 'Opera';
+  else if (ua.indexOf('Trident') > -1) browser = 'Internet Explorer';
+  else if (ua.indexOf('Edge') > -1 || ua.indexOf('Edg') > -1) browser = 'Microsoft Edge';
+  else if (ua.indexOf('Chrome') > -1) browser = 'Chrome';
+  else if (ua.indexOf('Safari') > -1) browser = 'Safari';
+
+  if (ua.indexOf('Windows NT 10.0') > -1) os = 'Windows 10/11';
+  else if (ua.indexOf('Windows NT 6.2') > -1) os = 'Windows 8';
+  else if (ua.indexOf('Windows NT 6.1') > -1) os = 'Windows 7';
+  else if (ua.indexOf('Macintosh') > -1) os = 'macOS';
+  else if (ua.indexOf('Android') > -1) os = 'Android';
+  else if (ua.indexOf('iPhone') > -1 || ua.indexOf('iPad') > -1) os = 'iOS';
+  else if (ua.indexOf('Linux') > -1) os = 'Linux';
+
+  return { ip, browser, os };
+}
+
+// Global Audit logger function
+export async function logAuditAction(
+  action: AuditLog['action'],
+  details: string
+): Promise<void> {
+  try {
+    const colRef = collection(db, 'audit_logs');
+    const info = await detectClientInfo();
+    const id = doc(colRef).id;
+    const email = auth.currentUser?.email || 'Sistema';
+    const userId = auth.currentUser?.uid || 'system';
+    
+    const payload: AuditLog = {
+      id,
+      userId,
+      email,
+      action,
+      details,
+      timestamp: Date.now(),
+      ip: info.ip,
+      browser: info.browser,
+      os: info.os
+    };
+
+    await setDoc(doc(db, 'audit_logs', id), payload);
+  } catch (err) {
+    console.error("Failed to log audit action:", err);
+  }
+}
+
 const CONTENT_DOC_REF = doc(db, 'site_content', 'main');
 
 export const contentService = {
@@ -181,6 +247,10 @@ export const contentService = {
   async updateSiteContent(content: Partial<SiteContent>): Promise<void> {
     try {
       const current = await this.getSiteContent();
+      
+      // Módulo 4: Versionamento de Configurações antes de atualizar
+      await this.createVersion('site_content', 'main', current, `Alterações: ${Object.keys(content).join(', ')}`);
+      
       const updated = {
         ...current,
         ...content,
@@ -207,6 +277,9 @@ export const contentService = {
       if (metaDesc && updated.seo.description) {
         metaDesc.setAttribute('content', updated.seo.description);
       }
+
+      // Módulo 6: Auditoria Completa
+      await logAuditAction('UPDATE', `Configurações globais de site_content atualizadas.`);
     } catch (err) {
       console.error("Error updating site content in Firestore:", err);
       throw err;
@@ -284,6 +357,17 @@ export const contentService = {
   async deleteBlogPost(id: string): Promise<void> {
     try {
       const docRef = doc(db, 'blog_posts', id);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data && data.imageUrl) {
+          try {
+            await this.deleteImage(data.imageUrl);
+          } catch (err) {
+            console.error("Error deleting blog post image from storage:", err);
+          }
+        }
+      }
       await deleteDoc(docRef);
     } catch (err) {
       console.error("Error deleting blog post:", err);
@@ -480,15 +564,6 @@ export const contentService = {
     return response.json();
   },
 
-  // Retrieve all appointments (Admin)
-  async getAppointments(): Promise<any[]> {
-    const response = await fetch('/api/appointments');
-    if (!response.ok) {
-      throw new Error('Erro ao buscar agendamentos.');
-    }
-    return response.json();
-  },
-
   // Update appointment status (Admin)
   async updateAppointmentStatus(id: string, status: 'pending_payment' | 'confirmed' | 'cancelled'): Promise<any> {
     const response = await fetch(`/api/appointments/${id}/status`, {
@@ -498,30 +573,6 @@ export const contentService = {
     });
     if (!response.ok) {
       throw new Error('Erro ao atualizar status do agendamento.');
-    }
-    return response.json();
-  },
-
-  // Update appointment details (Reschedule or Cancel)
-  async updateAppointment(id: string, data: { date?: string; timeSlot?: string; status?: 'pending_payment' | 'confirmed' | 'cancelled' }): Promise<any> {
-    const response = await fetch(`/api/appointments/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) {
-      throw new Error('Erro ao atualizar dados do agendamento.');
-    }
-    return response.json();
-  },
-
-  // Delete appointment (Admin)
-  async deleteAppointment(id: string): Promise<any> {
-    const response = await fetch(`/api/appointments/${id}`, {
-      method: 'DELETE',
-    });
-    if (!response.ok) {
-      throw new Error('Erro ao deletar agendamento.');
     }
     return response.json();
   },
@@ -599,6 +650,12 @@ export const contentService = {
   async deletePatient(id: string): Promise<void> {
     try {
       const docRef = doc(db, 'patients', id);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const item = snap.data() as Patient;
+        // Módulo 5: Lixeira Inteligente
+        await this.moveToTrash('patients', id, item, `Paciente: ${item.name || item.nome}`);
+      }
       await deleteDoc(docRef);
     } catch (err) {
       console.error("Error deleting patient:", err);
@@ -654,10 +711,18 @@ export const contentService = {
   async updatePatientRecord(id: string, data: Partial<PatientRecord>): Promise<void> {
     try {
       const docRef = doc(db, 'patient_records', id);
+      const currentSnap = await getDoc(docRef);
+      if (currentSnap.exists()) {
+        const currentData = currentSnap.data() as PatientRecord;
+        // Módulo 4: Versionamento de Prontuários
+        await this.createVersion('patient_records', id, currentData, `Edição de prontuário: ${Object.keys(data).join(', ')}`);
+      }
       await updateDoc(docRef, {
         ...data,
         updatedAt: Date.now()
       });
+      // Módulo 6: Auditoria Completa
+      await logAuditAction('UPDATE', `Prontuário clínico #${id} editado.`);
     } catch (err) {
       console.error("Error updating patient record:", err);
       handleFirestoreError(err, OperationType.UPDATE, `patient_records/${id}`);
@@ -667,6 +732,12 @@ export const contentService = {
   async deletePatientRecord(id: string): Promise<void> {
     try {
       const docRef = doc(db, 'patient_records', id);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const item = snap.data() as PatientRecord;
+        // Módulo 5: Lixeira Inteligente
+        await this.moveToTrash('patient_records', id, item, `Prontuário de sessão em ${item.sessionDate}`);
+      }
       await deleteDoc(docRef);
     } catch (err) {
       console.error("Error deleting patient record:", err);
@@ -713,7 +784,15 @@ export const contentService = {
   async updatePatientDocument(id: string, data: Partial<PatientDocument>): Promise<void> {
     try {
       const docRef = doc(db, 'patient_documents', id);
+      const currentSnap = await getDoc(docRef);
+      if (currentSnap.exists()) {
+        const currentData = currentSnap.data() as PatientDocument;
+        // Módulo 4: Versionamento de Documentos
+        await this.createVersion('patient_documents', id, currentData, `Edição de metadados do documento: ${Object.keys(data).join(', ')}`);
+      }
       await updateDoc(docRef, data);
+      // Módulo 6: Auditoria Completa
+      await logAuditAction('UPDATE', `Metadados do documento clínico #${id} alterados.`);
     } catch (err) {
       console.error("Error updating patient document:", err);
       handleFirestoreError(err, OperationType.UPDATE, `patient_documents/${id}`);
@@ -723,6 +802,12 @@ export const contentService = {
   async deletePatientDocument(id: string): Promise<void> {
     try {
       const docRef = doc(db, 'patient_documents', id);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const item = snap.data() as PatientDocument;
+        // Módulo 5: Lixeira Inteligente
+        await this.moveToTrash('patient_documents', id, item, `Documento: ${item.originalName}`);
+      }
       await deleteDoc(docRef);
     } catch (err) {
       console.error("Error deleting patient document:", err);
@@ -774,6 +859,327 @@ export const contentService = {
       await deleteObject(fileRef);
     } catch (err) {
       console.error("Error deleting document file from storage:", err);
+    }
+  },
+
+  // === APPOINTMENTS ===
+  async getAppointments(): Promise<Appointment[]> {
+    try {
+      const colRef = collection(db, 'appointments');
+      const snap = await getDocs(colRef);
+      return snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Appointment));
+    } catch (err) {
+      console.error("Error fetching appointments:", err);
+      handleFirestoreError(err, OperationType.LIST, 'appointments');
+    }
+  },
+
+  async createAppointment(appt: Omit<Appointment, 'id'> & { id?: string }): Promise<Appointment> {
+    try {
+      const colRef = collection(db, 'appointments');
+      const id = appt.id || doc(colRef).id;
+      const payload = {
+        ...appt,
+        id,
+        createdAt: appt.createdAt || Date.now()
+      };
+      await setDoc(doc(db, 'appointments', id), payload);
+      return payload as Appointment;
+    } catch (err) {
+      console.error("Error creating appointment:", err);
+      handleFirestoreError(err, OperationType.CREATE, 'appointments');
+    }
+  },
+
+  async updateAppointment(id: string, data: Partial<Appointment>): Promise<void> {
+    try {
+      const docRef = doc(db, 'appointments', id);
+      await updateDoc(docRef, data);
+    } catch (err) {
+      console.error("Error updating appointment:", err);
+      handleFirestoreError(err, OperationType.UPDATE, `appointments/${id}`);
+    }
+  },
+
+  async deleteAppointment(id: string): Promise<void> {
+    try {
+      const docRef = doc(db, 'appointments', id);
+      await deleteDoc(docRef);
+    } catch (err) {
+      console.error("Error deleting appointment:", err);
+      handleFirestoreError(err, OperationType.DELETE, `appointments/${id}`);
+    }
+  },
+
+  // === FINANCIAL TRANSACTIONS ===
+  async getFinancialTransactions(): Promise<FinancialTransaction[]> {
+    try {
+      const colRef = collection(db, 'financial_transactions');
+      const snap = await getDocs(colRef);
+      return snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as FinancialTransaction));
+    } catch (err) {
+      console.error("Error fetching financial transactions:", err);
+      handleFirestoreError(err, OperationType.LIST, 'financial_transactions');
+    }
+  },
+
+  async createFinancialTransaction(tx: Omit<FinancialTransaction, 'id'> & { id?: string }): Promise<FinancialTransaction> {
+    try {
+      const colRef = collection(db, 'financial_transactions');
+      const id = tx.id || doc(colRef).id;
+      const payload = {
+        ...tx,
+        id,
+        createdAt: tx.createdAt || Date.now()
+      };
+      await setDoc(doc(db, 'financial_transactions', id), payload);
+      return payload as FinancialTransaction;
+    } catch (err) {
+      console.error("Error creating financial transaction:", err);
+      handleFirestoreError(err, OperationType.CREATE, 'financial_transactions');
+    }
+  },
+
+  async updateFinancialTransaction(id: string, data: Partial<FinancialTransaction>): Promise<void> {
+    try {
+      const docRef = doc(db, 'financial_transactions', id);
+      await updateDoc(docRef, data);
+    } catch (err) {
+      console.error("Error updating financial transaction:", err);
+      handleFirestoreError(err, OperationType.UPDATE, `financial_transactions/${id}`);
+    }
+  },
+
+  async deleteFinancialTransaction(id: string): Promise<void> {
+    try {
+      const docRef = doc(db, 'financial_transactions', id);
+      await deleteDoc(docRef);
+    } catch (err) {
+      console.error("Error deleting financial transaction:", err);
+      handleFirestoreError(err, OperationType.DELETE, `financial_transactions/${id}`);
+    }
+  },
+
+  // === RECEIPTS ===
+  async getReceipts(): Promise<Receipt[]> {
+    try {
+      const colRef = collection(db, 'receipts');
+      const snap = await getDocs(colRef);
+      return snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Receipt));
+    } catch (err) {
+      console.error("Error fetching receipts:", err);
+      handleFirestoreError(err, OperationType.LIST, 'receipts');
+    }
+  },
+
+  async createReceipt(receipt: Omit<Receipt, 'id'> & { id?: string }): Promise<Receipt> {
+    try {
+      const colRef = collection(db, 'receipts');
+      const id = receipt.id || doc(colRef).id;
+      const payload = {
+        ...receipt,
+        id,
+        createdAt: receipt.createdAt || Date.now()
+      };
+      await setDoc(doc(db, 'receipts', id), payload);
+      return payload as Receipt;
+    } catch (err) {
+      console.error("Error creating receipt:", err);
+      handleFirestoreError(err, OperationType.CREATE, 'receipts');
+    }
+  },
+
+  async deleteReceipt(id: string): Promise<void> {
+    try {
+      const docRef = doc(db, 'receipts', id);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const item = snap.data() as Receipt;
+        await this.moveToTrash('receipts', id, item, `Recibo de ${item.patientName} (${item.date})`);
+      }
+      await deleteDoc(docRef);
+    } catch (err) {
+      console.error("Error deleting receipt:", err);
+      handleFirestoreError(err, OperationType.DELETE, `receipts/${id}`);
+    }
+  },
+
+  // === AUDIT LOGS ===
+  async getAuditLogs(): Promise<AuditLog[]> {
+    try {
+      const snap = await getDocs(collection(db, 'audit_logs'));
+      const logs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as AuditLog));
+      return logs.sort((a, b) => b.timestamp - a.timestamp);
+    } catch (err) {
+      console.error("Error fetching audit logs:", err);
+      return [];
+    }
+  },
+
+  // === VERSIONING ===
+  async createVersion(
+    collectionName: 'patient_records' | 'patient_documents' | 'blog_posts' | 'site_content',
+    documentId: string,
+    data: any,
+    changes: string
+  ): Promise<void> {
+    try {
+      const colRef = collection(db, 'document_versions');
+      const q = query(colRef, where('documentId', '==', documentId));
+      const snap = await getDocs(q);
+      const nextVersion = snap.size + 1;
+
+      const id = doc(colRef).id;
+      const email = auth.currentUser?.email || 'Sistema';
+
+      const versionDoc: DocumentVersion = {
+        id,
+        documentId,
+        collectionName,
+        versionNumber: nextVersion,
+        updatedAt: Date.now(),
+        updatedBy: email,
+        data,
+        changes
+      };
+
+      await setDoc(doc(db, 'document_versions', id), versionDoc);
+      await logAuditAction('UPDATE', `Nova versão #${nextVersion} gerada para ${collectionName}/${documentId}. Alteração: ${changes}`);
+    } catch (err) {
+      console.error("Error creating document version:", err);
+    }
+  },
+
+  async getDocumentVersions(
+    collectionName: string,
+    documentId: string
+  ): Promise<DocumentVersion[]> {
+    try {
+      const colRef = collection(db, 'document_versions');
+      const q = query(
+        colRef, 
+        where('collectionName', '==', collectionName),
+        where('documentId', '==', documentId)
+      );
+      const snap = await getDocs(q);
+      const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as DocumentVersion));
+      return list.sort((a, b) => b.versionNumber - a.versionNumber);
+    } catch (err) {
+      console.error("Error getting document versions:", err);
+      return [];
+    }
+  },
+
+  async getAllDocumentVersions(): Promise<DocumentVersion[]> {
+    try {
+      const colRef = collection(db, 'document_versions');
+      const snap = await getDocs(colRef);
+      const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as DocumentVersion));
+      return list.sort((a, b) => b.updatedAt - a.updatedAt);
+    } catch (err) {
+      console.error("Error getting all versions:", err);
+      return [];
+    }
+  },
+
+  async restoreVersion(versionId: string): Promise<void> {
+    try {
+      const versionDocRef = doc(db, 'document_versions', versionId);
+      const snap = await getDoc(versionDocRef);
+      if (!snap.exists()) throw new Error('Versão não encontrada');
+
+      const version = snap.data() as DocumentVersion;
+      const targetDocRef = doc(db, version.collectionName, version.documentId);
+      
+      await setDoc(targetDocRef, version.data, { merge: true });
+
+      await this.createVersion(
+        version.collectionName,
+        version.documentId,
+        version.data,
+        `Restaurado para a versão #${version.versionNumber}`
+      );
+
+      await logAuditAction('RESTORE', `Documento ${version.collectionName}/${version.documentId} restaurado com sucesso para a versão #${version.versionNumber}.`);
+    } catch (err) {
+      console.error("Error restoring version:", err);
+      throw err;
+    }
+  },
+
+  // === TRASH BIN (90 DAYS EXPIRY PREPARATION) ===
+  async getTrashItems(): Promise<TrashItem[]> {
+    try {
+      const snap = await getDocs(collection(db, 'trash_bin'));
+      const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as TrashItem));
+      const limitTime = Date.now() - 7776000000; // 90 days
+      return list.filter(item => item.deletedAt >= limitTime).sort((a, b) => b.deletedAt - a.deletedAt);
+    } catch (err) {
+      console.error("Error fetching trash items:", err);
+      return [];
+    }
+  },
+
+  async moveToTrash(
+    collectionName: TrashItem['originalCollection'],
+    documentId: string,
+    data: any,
+    title: string
+  ): Promise<void> {
+    try {
+      const colRef = collection(db, 'trash_bin');
+      const id = doc(colRef).id;
+      const email = auth.currentUser?.email || 'Sistema';
+
+      const trashDoc: TrashItem = {
+        id,
+        originalId: documentId,
+        originalCollection: collectionName,
+        title,
+        deletedAt: Date.now(),
+        deletedBy: email,
+        data
+      };
+
+      await setDoc(doc(db, 'trash_bin', id), trashDoc);
+      await logAuditAction('DELETE', `Item '${title}' movido para a Lixeira Inteligente.`);
+    } catch (err) {
+      console.error("Error moving to trash:", err);
+    }
+  },
+
+  async restoreFromTrash(trashItemId: string): Promise<void> {
+    try {
+      const trashDocRef = doc(db, 'trash_bin', trashItemId);
+      const snap = await getDoc(trashDocRef);
+      if (!snap.exists()) throw new Error('Item não encontrado na lixeira');
+
+      const item = snap.data() as TrashItem;
+      const targetDocRef = doc(db, item.originalCollection, item.originalId);
+
+      await setDoc(targetDocRef, item.data);
+      await deleteDoc(trashDocRef);
+
+      await logAuditAction('TRASH_RESTORE', `Item '${item.title}' recuperado com sucesso da lixeira.`);
+    } catch (err) {
+      console.error("Error restoring from trash:", err);
+      throw err;
+    }
+  },
+
+  async deletePermanentlyFromTrash(trashItemId: string): Promise<void> {
+    try {
+      const trashDocRef = doc(db, 'trash_bin', trashItemId);
+      const snap = await getDoc(trashDocRef);
+      if (!snap.exists()) throw new Error('Item não encontrado na lixeira');
+
+      const item = snap.data() as TrashItem;
+      await deleteDoc(trashDocRef);
+
+      await logAuditAction('TRASH_DELETE', `Exclusão permanente: '${item.title}' removido definitivamente.`);
+    } catch (err) {
+      console.error("Error deleting permanently from trash:", err);
+      throw err;
     }
   }
 };

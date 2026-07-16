@@ -1,7 +1,7 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { onAuthStateChanged, User, signOut } from 'firebase/auth';
 import { auth } from '../firebase';
-import { contentService, SiteContent } from '../services/contentService';
+import { contentService, SiteContent, logAuditAction } from '../services/contentService';
 import { BlogPost } from '../types';
 import { PSYCHOLOGIST_INFO, SERVICES, PROCESS_STEPS, FAQS, TESTIMONIALS, BLOG_POSTS } from '../data';
 
@@ -92,6 +92,8 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const prevUserRef = useRef<User | null>(null);
+
   useEffect(() => {
     // Load initial data from Firebase in parallel
     Promise.all([refreshContent(), refreshBlog()]).finally(() => {
@@ -99,8 +101,16 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
 
     // Subscribe to Firebase Auth state changes
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      const prevUser = prevUserRef.current;
       setUser(currentUser);
+      prevUserRef.current = currentUser;
+
+      if (currentUser && !prevUser) {
+        await logAuditAction('LOGIN', `Usuário ${currentUser.email || currentUser.uid} realizou login no painel administrativo.`);
+      } else if (!currentUser && prevUser) {
+        await logAuditAction('LOGOUT', `Usuário ${prevUser.email || prevUser.uid} encerrou a sessão.`);
+      }
     });
 
     return () => unsubscribe();

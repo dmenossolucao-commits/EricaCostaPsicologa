@@ -41,12 +41,15 @@ service cloud.firestore {
       allow read, update, delete: if isAdmin();
     }
     
-    // Appointments: anyone can create or view their individual appointment details (checkout),
-    // but retrieving lists of appointments or modifying/deleting them requires admin auth
+    // Appointments: anyone can create or view individual appointment details.
+    // Anonymous patients can list (needed for booking and searching theirs) and update (only for rescheduling or cancelling).
+    // Deleting requires admin auth.
     match /appointments/{document} {
-      allow create: if true;
-      allow get: if true;
-      allow list, update, delete: if isAdmin();
+      allow create, get, list: if true;
+      allow update: if isAdmin() || (
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'date', 'timeSlot'])
+      );
+      allow delete: if isAdmin();
     }
     
     // Blocked slots: read by anyone (for calendar availability), write only by authenticated admins
@@ -67,6 +70,41 @@ service cloud.firestore {
 
     // Patient documents: strictly private, only authenticated admins can read/write/delete
     match /patient_documents/{document} {
+      allow read, write: if isAdmin();
+    }
+
+    // Financial transactions: strictly private, only authenticated admins can read/write/delete
+    match /financial_transactions/{document} {
+      allow read, write: if isAdmin();
+    }
+
+    // Receipts: strictly private, only authenticated admins can read/write/delete
+    match /receipts/{document} {
+      allow read, write: if isAdmin();
+    }
+
+    // Backup logs: strictly private, only authenticated admins can read/write/delete
+    match /backup_logs/{document} {
+      allow read, write: if isAdmin();
+    }
+
+    // Backup settings: strictly private, only authenticated admins can read/write/delete
+    match /backup_settings/{document} {
+      allow read, write: if isAdmin();
+    }
+
+    // Security Audit logs: strictly private, only authenticated admins can read/write/delete
+    match /audit_logs/{document} {
+      allow read, write: if isAdmin();
+    }
+
+    // Document versions: strictly private, only authenticated admins can read/write/delete
+    match /document_versions/{document} {
+      allow read, write: if isAdmin();
+    }
+
+    // Trash bin: strictly private, only authenticated admins can read/write/delete
+    match /trash_bin/{document} {
       allow read, write: if isAdmin();
     }
   }

@@ -1393,7 +1393,8 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
             ) : filteredPatients.length > 0 ? (
               // Patients Responsive Table & Cards
               <div className="bg-white rounded-2xl border border-sand-200 shadow-sm overflow-hidden">
-                <div className="overflow-x-auto">
+                {/* Table for Desktop/Tablet */}
+                <div className="hidden md:block overflow-x-auto">
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="bg-sand-50/60 border-b border-sand-100 text-[10px] font-bold text-sand-500 uppercase tracking-wider font-mono">
@@ -1485,6 +1486,75 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
                       ))}
                     </tbody>
                   </table>
+                </div>
+
+                {/* Cards for Mobile */}
+                <div className="block md:hidden divide-y divide-sand-100 bg-white">
+                  {filteredPatients.map((pt) => (
+                    <div 
+                      key={pt.id} 
+                      className="p-5 space-y-4 hover:bg-sand-50/20 active:bg-sand-100/30 transition-colors cursor-pointer"
+                      onClick={() => {
+                        setSelectedPatient(pt);
+                        setActiveTab('cadastro');
+                      }}
+                    >
+                      <div className="flex justify-between items-start">
+                        <div className="flex items-center gap-3">
+                          <div className="h-9 w-9 rounded-xl bg-sand-100 text-sand-700 flex items-center justify-center font-bold text-xs border border-sand-200/50 uppercase">
+                            {(pt.nome || pt.name || 'P').substring(0, 2)}
+                          </div>
+                          <div>
+                            <p className="font-bold text-sand-900">
+                              {pt.nome || pt.name}
+                            </p>
+                            <p className="text-[10px] text-sand-400 mt-0.5 font-mono">
+                              CPF: {pt.cpf ? pt.cpf : 'Não informado'}
+                            </p>
+                          </div>
+                        </div>
+                        <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                          (pt.status || 'Ativo') === 'Ativo'
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                            : 'bg-sand-150 text-sand-600 border border-sand-200'
+                        }`}>
+                          {pt.status || 'Ativo'}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 text-[11px] font-mono border-t border-b border-sand-100/50 py-2.5 text-sand-600">
+                        <div>
+                          <p className="text-[9px] text-sand-400 font-bold uppercase">Telefone</p>
+                          <p className="font-bold text-sand-800">{pt.telefone || pt.phone || 'Não informado'}</p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] text-sand-400 font-bold uppercase">E-mail</p>
+                          <p className="truncate max-w-[120px]">{pt.email || 'Não informado'}</p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] text-sand-400 font-bold uppercase">Última Consulta</p>
+                          <p>{pt.ultimaConsulta || '--/--/----'}</p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] text-sand-400 font-bold uppercase">Próxima Consulta</p>
+                          <p>{pt.proximaConsulta || 'Nenhuma agendada'}</p>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end pt-1" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => {
+                            setSelectedPatient(pt);
+                            setActiveTab('cadastro');
+                          }}
+                          className="px-4 py-2 bg-sand-50 hover:bg-sand-100 text-sand-800 border border-sand-200 rounded-xl font-bold text-[10px] uppercase cursor-pointer flex items-center gap-1.5 transition-all"
+                        >
+                          <span>Abrir</span>
+                          <ChevronRight size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             ) : (
