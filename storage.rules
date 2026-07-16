@@ -2,32 +2,37 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     
-    // Only allow authenticated, authorized administrators to read or write clinical patient documents
-    match /patient_documents/{allPaths=**} {
-      allow read, write: if request.auth != null && (
+    // Helper to check if the user is an authorized admin
+    function isAdmin() {
+      return request.auth != null && (
         request.auth.token.email == 'ericacostapsicologa7@gmail.com' ||
         request.auth.token.email == 'd-briciod2@hotmail.com' ||
-        request.auth.token.email == 'admin@ericacostapsi.com.br'
-      );
-    }
-    
-    // Blog and site appearance media can be viewed by public, but uploaded only by authenticated admins
-    match /blog_posts/{allPaths=**} {
-      allow read: if true;
-      allow write: if request.auth != null && (
-        request.auth.token.email == 'ericacostapsicologa7@gmail.com' ||
-        request.auth.token.email == 'd-briciod2@hotmail.com' ||
-        request.auth.token.email == 'admin@ericacostapsi.com.br'
+        request.auth.token.email == 'admin@ericacostapsi.com.br' ||
+        request.auth.token.email == 'dmenossolucao@gmail.com'
       );
     }
 
-    match /site_content/{allPaths=**} {
+    // Patients clinical files (strictly private)
+    match /patients/{patientId}/{allPaths=**} {
+      allow read, write: if isAdmin();
+    }
+    
+    // Admin/psychologist profile photos (read is public, write is admin-only)
+    match /admins/{allPaths=**} {
       allow read: if true;
-      allow write: if request.auth != null && (
-        request.auth.token.email == 'ericacostapsicologa7@gmail.com' ||
-        request.auth.token.email == 'd-briciod2@hotmail.com' ||
-        request.auth.token.email == 'admin@ericacostapsi.com.br'
-      );
+      allow write: if isAdmin();
+    }
+    
+    // Blog media (read is public, write is admin-only)
+    match /blog/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Site appearance media (read is public, write is admin-only)
+    match /site/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAdmin();
     }
   }
 }

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Camera, RefreshCw, RotateCw, Crop, Sun, Check, X, ShieldAlert, Image, FileText, Settings, Loader2 } from 'lucide-react';
 import { Patient } from '../../../types';
 import { contentService } from '../../../services/contentService';
+import { jsPDF } from 'jspdf';
 
 interface ScannerCaptureProps {
   patient: Patient;
@@ -21,6 +22,7 @@ export const ScannerCapture: React.FC<ScannerCaptureProps> = ({
   const [rotation, setRotation] = useState(0); // in degrees: 0, 90, 180, 270
   const [brightness, setBrightness] = useState(100); // 0-200%
   const [contrast, setContrast] = useState(100); // 0-200%
+  const [cropBorders, setCropBorders] = useState(false); // real edge crop
   const [autoPDF, setAutoPDF] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -140,49 +142,96 @@ export const ScannerCapture: React.FC<ScannerCaptureProps> = ({
 
       setUploadProgress(30);
 
-      // Setup size based on rotation
+      // Define real source coordinates (crop borders if enabled)
+      let srcX = 0;
+      let srcY = 0;
+      let srcW = img.width;
+      let srcH = img.height;
+
+      if (cropBorders) {
+        // Crop 6% from each edge
+        const borderX = img.width * 0.06;
+        const borderY = img.height * 0.06;
+        srcX = borderX;
+        srcY = borderY;
+        srcW = img.width - (borderX * 2);
+        srcH = img.height - (borderY * 2);
+      }
+
+      // Setup output canvas dimensions based on final orientation/rotation
       const isRotated90or270 = rotation === 90 || rotation === 270;
-      tempCanvas.width = isRotated90or270 ? img.height : img.width;
-      tempCanvas.height = isRotated90or270 ? img.width : img.height;
+      tempCanvas.width = isRotated90or270 ? srcH : srcW;
+      tempCanvas.height = isRotated90or270 ? srcW : srcH;
 
       if (ctx) {
-        // Move origin to center of canvas to rotate properly
+        // Clear canvas cleanly
+        ctx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
+        
+        // 1. Apply visual enhancements directly to Canvas 2D Context before drawing!
+        ctx.filter = `brightness(${brightness}%) contrast(${contrast}%)`;
+
+        // 2. Translate and rotate about the center
         ctx.translate(tempCanvas.width / 2, tempCanvas.height / 2);
         ctx.rotate((rotation * Math.PI) / 180);
-        ctx.drawImage(img, -img.width / 2, -img.height / 2);
 
-        // Apply visual enhancements structure (contrast and brightness)
-        // Here we can prepare future canvas-level manipulation:
-        // const imgData = ctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
-        // ... adjust pixels ...
+        // 3. Draw cropped source coordinates centered onto rotated context
+        ctx.drawImage(
+          img,
+          srcX, srcY, srcW, srcH, // Crop source
+          -srcW / 2, -srcH / 2, srcW, srcH // Rotated destination
+        );
       }
 
       setUploadProgress(50);
 
-      // Convert canvas to Blob
-      tempCanvas.toBlob(async (blob) => {
-        if (!blob) {
+      // Convert canvas output to JPEG Blob
+      tempCanvas.toBlob(async (jpegBlob) => {
+        if (!jpegBlob) {
           throw new Error('Falha ao processar imagem capturada.');
         }
 
-        // Determine correct suffix / format
-        const finalFormat = autoPDF ? 'pdf' : 'jpg';
+        let finalBlob: Blob = jpegBlob;
+        let finalFormat = 'jpg';
+        let finalMime = 'image/jpeg';
+
+        if (autoPDF) {
+          try {
+            // Generate a real, properly scaled client-side PDF document using jsPDF!
+            const pdf = new jsPDF({
+              orientation: tempCanvas.width > tempCanvas.height ? 'landscape' : 'portrait',
+              unit: 'px',
+              format: [tempCanvas.width, tempCanvas.height]
+            });
+
+            // Convert canvas to a high-quality JPEG data URL
+            const jpegDataUrl = tempCanvas.toDataURL('image/jpeg', 0.9);
+            pdf.addImage(jpegDataUrl, 'JPEG', 0, 0, tempCanvas.width, tempCanvas.height);
+
+            // Output as a standard PDF blob
+            const pdfBlob = pdf.output('blob');
+            finalBlob = pdfBlob;
+            finalFormat = 'pdf';
+            finalMime = 'application/pdf';
+            console.log(`[Scanner PDF Generator] Real PDF created successfully. Size: ${finalBlob.size} bytes`);
+          } catch (pdfErr) {
+            console.error('[Scanner PDF Generator] Error converting to real PDF, using image fallback:', pdfErr);
+          }
+        }
+
         const finalFileName = `${docName}.${finalFormat}`;
+        const category = 'Exames';
 
-        // Prepare standard category (Exames, Contratos or others)
-        const category = 'Exames'; 
-
-        // Upload to storage
+        // Upload to storage under the patients collection folder
         const uploadResult = await contentService.uploadDocumentFile(
           patient.id,
-          blob,
+          finalBlob,
           finalFileName,
           (progress) => {
             setUploadProgress(50 + Math.round(progress / 2));
           }
         );
 
-        // Write to Firestore collection "patient_documents"
+        // Write meta document data to patient_documents in Firestore
         const savedDoc = await contentService.createPatientDocument({
           patientId: patient.id,
           category,
@@ -190,17 +239,17 @@ export const ScannerCapture: React.FC<ScannerCaptureProps> = ({
           originalName: finalFileName,
           storagePath: uploadResult.storagePath,
           downloadURL: uploadResult.downloadURL,
-          fileType: autoPDF ? 'application/pdf' : 'image/jpeg',
-          fileSize: blob.size,
+          fileType: finalMime,
+          fileSize: finalBlob.size,
           uploadedBy: 'Psicóloga Erica Costa',
-          description: `Documento escaneado usando Scanner Inteligente - ${autoPDF ? 'Convertido em PDF' : 'Imagem JPG'}.`,
+          description: `Documento escaneado usando Scanner Clínico - ${autoPDF ? 'PDF gerado nativamente' : 'Imagem de alta definição'}.`,
           tags: ['Scanner', autoPDF ? 'PDF' : 'JPEG'],
           linkedRecordIds: []
         });
 
         setUploading(false);
         onDocumentCaptured(savedDoc);
-      }, 'image/jpeg', 0.85);
+      }, 'image/jpeg', 0.9);
 
     } catch (err) {
       console.error('Error saving scanned doc:', err);
@@ -276,18 +325,25 @@ export const ScannerCapture: React.FC<ScannerCaptureProps> = ({
         )}
 
         {scannerMode === 'preview' && capturedImage && (
-          <div className="relative w-full h-full flex items-center justify-center p-4 bg-sand-950">
-            {/* Visual preview with live transforms */}
-            <img
-              src={capturedImage}
-              alt="Scan Preview"
+          <div className="relative w-full h-full flex items-center justify-center p-4 bg-sand-950 overflow-hidden">
+            {/* Visual preview with live transforms and CSS clipping for edge crop simulation */}
+            <div 
               style={{
                 transform: `rotate(${rotation}deg)`,
-                filter: `brightness(${brightness}%) contrast(${contrast}%)`,
-                transition: 'transform 0.15s ease-out'
+                transition: 'transform 0.15s ease-out',
+                clipPath: cropBorders ? 'inset(6%)' : 'none'
               }}
-              className="max-h-full max-w-full object-contain shadow-xl rounded"
-            />
+              className="max-h-full max-w-full flex items-center justify-center transition-all duration-150"
+            >
+              <img
+                src={capturedImage}
+                alt="Scan Preview"
+                style={{
+                  filter: `brightness(${brightness}%) contrast(${contrast}%)`
+                }}
+                className="max-h-full max-w-full object-contain shadow-xl rounded"
+              />
+            </div>
           </div>
         )}
 
@@ -418,6 +474,23 @@ export const ScannerCapture: React.FC<ScannerCaptureProps> = ({
                     type="checkbox"
                     checked={autoPDF}
                     onChange={(e) => setAutoPDF(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-8 h-4 bg-sand-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-sand-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-softblue-500"></div>
+                </label>
+              </div>
+
+              {/* Crop Borders Switch */}
+              <div className="flex items-center justify-between border-t border-sand-850/60 pt-2 text-[10px] font-mono">
+                <span className="text-sand-300 flex items-center gap-1">
+                  <Crop size={11} className="text-softblue-400" />
+                  <span>Recortar bordas das margens (6%)</span>
+                </span>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={cropBorders}
+                    onChange={(e) => setCropBorders(e.target.checked)}
                     className="sr-only peer"
                   />
                   <div className="w-8 h-4 bg-sand-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-sand-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-softblue-500"></div>

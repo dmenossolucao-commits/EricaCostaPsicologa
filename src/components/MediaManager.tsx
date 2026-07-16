@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { 
   Upload, Save, RefreshCw, CheckCircle2, AlertCircle, 
-  Trash2, Copy, Sparkles, Image as ImageIcon, Link as LinkIcon 
+  Trash2, Copy, Sparkles, Image as ImageIcon, Link as LinkIcon,
+  X, Calendar, Eye
 } from 'lucide-react';
 import { useSiteContent } from '../context/SiteContext';
 import { contentService } from '../services/contentService';
@@ -39,6 +40,25 @@ export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaM
   // Blog images collection states
   const [blogImages, setBlogImages] = useState<BlogImageItem[]>([]);
   const [loadingBlogImages, setLoadingBlogImages] = useState(false);
+
+  // Full-screen image lightbox state
+  const [fullscreenImage, setFullscreenImage] = useState<{ url: string; title: string } | null>(null);
+
+  // Persistence of upload dates for system images
+  const [uploadDates, setUploadDates] = useState<Record<string, string>>(() => {
+    try {
+      const saved = localStorage.getItem('mente_care_upload_dates');
+      return saved ? JSON.parse(saved) : {
+        hero: '14/07/2026, 14:32',
+        about: '14/07/2026, 14:35',
+        logo: '15/07/2026, 11:20',
+        favicon: '15/07/2026, 11:21',
+        admin: '16/07/2026, 09:15'
+      };
+    } catch {
+      return {};
+    }
+  });
 
   // Load blog images on mount
   useEffect(() => {
@@ -191,6 +211,14 @@ export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaM
       setUploadStatus(prev => ({ ...prev, [key]: 'Sucesso! Salvo com sucesso.' }));
       setUploadProgress(prev => ({ ...prev, [key]: 100 }));
 
+      // Update stored upload date
+      const nowStr = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+      setUploadDates(prev => {
+        const next = { ...prev, [key]: nowStr };
+        localStorage.setItem('mente_care_upload_dates', JSON.stringify(next));
+        return next;
+      });
+
       // Revoke and clear preview state
       setTimeout(() => {
         handleCancelSelection(key);
@@ -213,6 +241,98 @@ export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaM
     } catch (err) {
       console.error("Erro ao deletar imagem do blog:", err);
       alert("Erro ao excluir imagem.");
+    }
+  };
+
+  // Delete system image and update state immediately
+  const handleDeleteSystemImage = async (key: 'hero' | 'about' | 'logo' | 'favicon' | 'admin') => {
+    if (!window.confirm("Tem certeza que deseja excluir esta imagem? Ela será removida definitivamente.")) return;
+    
+    setUploadLoading(prev => ({ ...prev, [key]: true }));
+    setUploadStatus(prev => ({ ...prev, [key]: 'Removendo...' }));
+
+    try {
+      let oldUrl = '';
+      if (key === 'hero') {
+        oldUrl = siteContent.psychologist_info.heroImageUrl || '';
+        await updateSiteContent({
+          psychologist_info: {
+            ...siteContent.psychologist_info,
+            heroImageUrl: ''
+          }
+        });
+      } else if (key === 'about') {
+        oldUrl = siteContent.psychologist_info.aboutImageUrl || '';
+        await updateSiteContent({
+          psychologist_info: {
+            ...siteContent.psychologist_info,
+            aboutImageUrl: ''
+          }
+        });
+      } else if (key === 'logo') {
+        oldUrl = siteContent.psychologist_info.logoUrl || '';
+        await updateSiteContent({
+          psychologist_info: {
+            ...siteContent.psychologist_info,
+            logoUrl: ''
+          },
+          appearance: {
+            ...siteContent.appearance,
+            logoUrl: ''
+          }
+        });
+      } else if (key === 'favicon') {
+        oldUrl = (siteContent.appearance as any).faviconUrl || '';
+        await updateSiteContent({
+          appearance: {
+            ...siteContent.appearance,
+            faviconUrl: ''
+          } as any,
+          psychologist_info: {
+            ...siteContent.psychologist_info,
+            faviconUrl: ''
+          } as any
+        });
+      } else if (key === 'admin') {
+        oldUrl = dbAdminDoc?.photoURL || dbAdminDoc?.photoUrl || user?.photoURL || '';
+        
+        if (auth.currentUser) {
+          await updateProfile(auth.currentUser, { photoURL: '' });
+        }
+        const adminUidRef = doc(db, 'admins', user.uid);
+        await updateDoc(adminUidRef, { photoURL: '', photoUrl: '' });
+        try {
+          const adminEmailRef = doc(db, 'admins', user.email || '');
+          await updateDoc(adminEmailRef, { photoURL: '', photoUrl: '' });
+        } catch (e) {}
+
+        setDbAdminDoc(prev => ({ ...prev, photoURL: '', photoUrl: '' }));
+      }
+
+      if (oldUrl) {
+        await contentService.deleteImage(oldUrl);
+      }
+
+      setUploadStatus(prev => ({ ...prev, [key]: 'Sucesso! Removido com sucesso.' }));
+      setUploadProgress(prev => ({ ...prev, [key]: 0 }));
+      
+      // Update saved dates
+      setUploadDates(prev => {
+        const next = { ...prev };
+        delete next[key];
+        localStorage.setItem('mente_care_upload_dates', JSON.stringify(next));
+        return next;
+      });
+
+      setTimeout(() => {
+        setUploadStatus(prev => ({ ...prev, [key]: '' }));
+      }, 3000);
+
+    } catch (err: any) {
+      console.error("Erro ao excluir imagem:", err);
+      setUploadStatus(prev => ({ ...prev, [key]: `Erro: ${err.message || 'Falha ao remover.'}` }));
+    } finally {
+      setUploadLoading(prev => ({ ...prev, [key]: false }));
     }
   };
 
@@ -309,10 +429,17 @@ export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaM
                     <span className="text-[9px] font-mono font-bold uppercase bg-sand-100 text-sand-600 px-2 py-0.5 rounded">
                       {item.section}
                     </span>
-                    {hasPreview && (
+                    {hasPreview ? (
                       <span className="text-[9px] font-mono font-bold uppercase bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded animate-pulse">
                         Prévia Local
                       </span>
+                    ) : (
+                      uploadDates[item.key] && (
+                        <span className="text-[9px] font-mono text-sand-500 flex items-center gap-1">
+                          <Calendar size={10} />
+                          <span>{uploadDates[item.key]}</span>
+                        </span>
+                      )
                     )}
                   </div>
                   <h5 className="font-serif font-bold text-sm text-sand-950 mt-3">{item.label}</h5>
@@ -320,14 +447,25 @@ export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaM
                 </div>
 
                 {/* Preview Container */}
-                <div className="aspect-video w-full rounded-2xl bg-sand-50 border border-dashed border-sand-200 overflow-hidden relative flex items-center justify-center p-2">
+                <div className="aspect-video w-full rounded-2xl bg-sand-50 border border-dashed border-sand-200 overflow-hidden relative flex items-center justify-center p-2 group">
                   {currentUrl ? (
-                    <img
-                      src={currentUrl}
-                      alt={item.label}
-                      className={`w-full h-full rounded-xl ${item.objectFit || 'object-cover'} transition-all`}
-                      referrerPolicy="no-referrer"
-                    />
+                    <>
+                      <img
+                        src={currentUrl}
+                        alt={item.label}
+                        className={`w-full h-full rounded-xl ${item.objectFit || 'object-cover'} transition-all`}
+                        referrerPolicy="no-referrer"
+                      />
+                      
+                      {/* Hover Fullscreen trigger overlay */}
+                      <div 
+                        onClick={() => setFullscreenImage({ url: currentUrl, title: item.label })}
+                        className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 cursor-pointer text-white"
+                      >
+                        <Eye size={16} />
+                        <span className="text-xs font-bold font-mono uppercase tracking-wider">Ampliar</span>
+                      </div>
+                    </>
                   ) : (
                     <div className="text-center p-4">
                       <ImageIcon className="text-sand-300 mx-auto mb-1.5" size={24} />
@@ -373,7 +511,7 @@ export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaM
                         className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer"
                       >
                         <Save size={13} />
-                        <span>Enviar</span>
+                        <span>Salvar</span>
                       </button>
                       <button
                         type="button"
@@ -385,10 +523,10 @@ export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaM
                       </button>
                     </div>
                   ) : (
-                    <div>
-                      <label className="w-full py-2.5 bg-softblue-500 hover:bg-softblue-600 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer">
+                    <div className="flex gap-2">
+                      <label className="flex-1 py-2.5 bg-softblue-500 hover:bg-softblue-600 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer">
                         <Upload size={13} />
-                        <span>Selecionar</span>
+                        <span>{item.url ? 'Substituir' : 'Selecionar'}</span>
                         <input
                           type="file"
                           accept="image/*"
@@ -399,6 +537,18 @@ export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaM
                           }}
                         />
                       </label>
+                      
+                      {item.url && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSystemImage(item.key as any)}
+                          disabled={loading}
+                          className="p-2.5 border border-rose-200 hover:bg-rose-50 text-rose-600 rounded-xl cursor-pointer transition-colors"
+                          title="Excluir Imagem"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -574,6 +724,33 @@ export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaM
           </div>
         </div>
       </div>
+
+      {/* Immersive Lightbox Modal */}
+      {fullscreenImage && (
+        <div 
+          className="fixed inset-0 bg-black/95 flex flex-col items-center justify-center p-4 z-50 animate-fade-in"
+          onClick={() => setFullscreenImage(null)}
+        >
+          <button 
+            onClick={() => setFullscreenImage(null)}
+            className="absolute top-6 right-6 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white cursor-pointer transition-all"
+          >
+            <X size={20} />
+          </button>
+          
+          <img 
+            src={fullscreenImage.url} 
+            alt={fullscreenImage.title} 
+            className="max-h-[85vh] max-w-[95vw] object-contain rounded-2xl shadow-2xl transition-transform duration-300 hover:scale-[1.01]"
+            referrerPolicy="no-referrer"
+          />
+          
+          <div className="mt-4 text-center">
+            <h5 className="text-white text-sm font-medium">{fullscreenImage.title}</h5>
+            <p className="text-sand-400 text-xs mt-1">Clique em qualquer lugar para fechar</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

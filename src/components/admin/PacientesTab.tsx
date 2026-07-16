@@ -505,7 +505,6 @@ export default function PacientesTab({
                     <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">E-mail</label>
                     <input
                       type="email"
-                      required
                       value={patientForm.email}
                       onChange={(e) => setPatientForm({ ...patientForm, email: e.target.value })}
                       className="w-full px-3 py-2 rounded-xl border border-sand-200 focus:outline-none"
@@ -518,7 +517,6 @@ export default function PacientesTab({
                     <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Telefone / WhatsApp</label>
                     <input
                       type="text"
-                      required
                       value={patientForm.phone}
                       onChange={(e) => setPatientForm({ ...patientForm, phone: e.target.value })}
                       placeholder="(85) 99999-9999"

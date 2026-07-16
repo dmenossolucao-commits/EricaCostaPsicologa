@@ -155,43 +155,101 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
       return;
     }
 
+    const isValidCPF = (cpfStr: string): boolean => {
+      const cleanCpf = cpfStr.replace(/\D/g, '');
+      if (cleanCpf.length !== 11) return false;
+      if (/^(\d)\1{10}$/.test(cleanCpf)) return false;
+      
+      let sum = 0;
+      let remainder;
+      
+      for (let i = 1; i <= 9; i++) {
+        sum += parseInt(cleanCpf.substring(i - 1, i)) * (11 - i);
+      }
+      remainder = (sum * 10) % 11;
+      if (remainder === 10 || remainder === 11) remainder = 0;
+      if (remainder !== parseInt(cleanCpf.substring(9, 10))) return false;
+      
+      sum = 0;
+      for (let i = 1; i <= 10; i++) {
+        sum += parseInt(cleanCpf.substring(i - 1, i)) * (12 - i);
+      }
+      remainder = (sum * 10) % 11;
+      if (remainder === 10 || remainder === 11) remainder = 0;
+      if (remainder !== parseInt(cleanCpf.substring(10, 11))) return false;
+      
+      return true;
+    };
+
+    const formatCPF = (cpfStr: string): string => {
+      const clean = cpfStr.replace(/\D/g, '');
+      if (clean.length !== 11) return cpfStr;
+      return `${clean.substring(0, 3)}.${clean.substring(3, 6)}.${clean.substring(6, 9)}-${clean.substring(9, 11)}`;
+    };
+
+    if (form.cpf && form.cpf.trim() !== '') {
+      if (!isValidCPF(form.cpf)) {
+        setErrorMessage("O CPF informado é inválido. Por favor, digite um CPF válido ou deixe o campo vazio.");
+        return;
+      }
+    }
+
+    if (form.email && form.email.trim() !== '') {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(form.email.trim())) {
+        setErrorMessage("O e-mail informado é inválido. Por favor, digite um e-mail válido ou deixe o campo vazio.");
+        return;
+      }
+    }
+
+    if (form.telefone && form.telefone.trim() !== '') {
+      const digits = form.telefone.replace(/\D/g, '');
+      if (digits.length < 8) {
+        setErrorMessage("O telefone informado é muito curto. Por favor, digite um telefone válido (mínimo de 8 dígitos) ou deixe o campo vazio.");
+        return;
+      }
+    }
+
     setFormLoading(true);
     setErrorMessage('');
     setSuccessMessage('');
 
     try {
-      const flatAddressStr = `${form.endereco.rua}, ${form.endereco.numero}${form.endereco.complemento ? ` (${form.endereco.complemento})` : ''} - ${form.endereco.bairro}, ${form.endereco.cidade}/${form.endereco.estado}`;
+      const clean = form.cpf?.replace(/\D/g, '') || '';
+      const formattedCpf = clean.length === 11 ? formatCPF(form.cpf) : (form.cpf || '');
+
+      const flatAddressStr = `${form.endereco.rua || ''}, ${form.endereco.numero || ''}${form.endereco.complemento ? ` (${form.endereco.complemento})` : ''} - ${form.endereco.bairro || ''}, ${form.endereco.cidade || ''}/${form.endereco.estado || ''}`;
       
       // Map properties to meet Portuguese DB requirements AND English legacy fields for dashboard compatibility
       const payload: Omit<Patient, 'id'> = {
         // Legacy compatibility keys
         name: form.nome,
-        email: form.email,
-        phone: form.telefone,
-        cpf: form.cpf,
-        dateOfBirth: form.dataNascimento,
+        email: form.email || '',
+        phone: form.telefone || '',
+        cpf: formattedCpf,
+        dateOfBirth: form.dataNascimento || '',
         address: flatAddressStr,
-        notes: form.observacoes,
+        notes: form.observacoes || '',
         createdAt: isEditing && selectedPatient ? selectedPatient.createdAt : Date.now(),
         recibos: isEditing && selectedPatient ? (selectedPatient.recibos || []) : [],
         history: isEditing && selectedPatient ? (selectedPatient.history || '') : '',
 
         // Portuguese specific fields
         nome: form.nome,
-        rg: form.rg,
-        dataNascimento: form.dataNascimento,
-        sexo: form.sexo,
-        estadoCivil: form.estadoCivil,
-        profissao: form.profissao,
-        telefone: form.telefone,
-        whatsapp: form.whatsapp,
+        rg: form.rg || '',
+        dataNascimento: form.dataNascimento || '',
+        sexo: form.sexo || 'Feminino',
+        estadoCivil: form.estadoCivil || 'Solteiro(a)',
+        profissao: form.profissao || '',
+        telefone: form.telefone || '',
+        whatsapp: form.whatsapp || form.telefone || '',
         endereco: { ...form.endereco },
-        convenio: form.convenio,
-        contatoEmergencia: form.contatoEmergencia,
-        nomeResponsavel: form.nomeResponsavel,
-        observacoes: form.observacoes,
+        convenio: form.convenio || 'Particular',
+        contatoEmergencia: form.contatoEmergencia || '',
+        nomeResponsavel: form.nomeResponsavel || '',
+        observacoes: form.observacoes || '',
         updatedAt: Date.now(),
-        status: form.status,
+        status: form.status || 'Ativo',
         photoUrl: form.photoUrl || ''
       };
 
@@ -706,10 +764,9 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
                           <span className="text-[10px] font-mono font-bold uppercase text-softblue-600 tracking-wider block">2. Informações de Contato</span>
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                             <div>
-                              <span className="text-[9px] font-bold text-sand-500 uppercase font-mono">Telefone Principal *</span>
+                              <span className="text-[9px] font-bold text-sand-500 uppercase font-mono">Telefone Principal</span>
                               <input
                                 type="tel"
-                                required
                                 value={form.telefone}
                                 onChange={(e) => setForm({ ...form, telefone: e.target.value })}
                                 placeholder="(00) 00000-0000"
@@ -727,10 +784,9 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
                               />
                             </div>
                             <div>
-                              <span className="text-[9px] font-bold text-sand-500 uppercase font-mono">E-mail *</span>
+                              <span className="text-[9px] font-bold text-sand-500 uppercase font-mono">E-mail</span>
                               <input
                                 type="email"
-                                required
                                 value={form.email}
                                 onChange={(e) => setForm({ ...form, email: e.target.value })}
                                 placeholder="exemplo@email.com"
@@ -1068,10 +1124,9 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
                   <span className="text-[10px] font-mono font-bold uppercase text-softblue-600 tracking-wider block">2. Contato</span>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
-                      <span className="text-[9px] font-bold text-sand-500 uppercase font-mono">Telefone Principal *</span>
+                      <span className="text-[9px] font-bold text-sand-500 uppercase font-mono">Telefone Principal</span>
                       <input
                         type="tel"
-                        required
                         placeholder="(00) 00000-0000"
                         value={form.telefone}
                         onChange={(e) => setForm({ ...form, telefone: e.target.value })}
@@ -1089,10 +1144,9 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
                       />
                     </div>
                     <div>
-                      <span className="text-[9px] font-bold text-sand-500 uppercase font-mono">E-mail *</span>
+                      <span className="text-[9px] font-bold text-sand-500 uppercase font-mono">E-mail</span>
                       <input
                         type="email"
-                        required
                         placeholder="exemplo@email.com"
                         value={form.email}
                         onChange={(e) => setForm({ ...form, email: e.target.value })}
@@ -1437,10 +1491,10 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
                           <td className="py-4 px-6">
                             <div className="space-y-0.5">
                               <p className="font-semibold text-sand-800 font-mono">
-                                {pt.telefone || pt.phone}
+                                {pt.telefone || pt.phone || 'Não informado'}
                               </p>
                               <p className="text-[10px] text-sand-400 truncate max-w-[150px]">
-                                {pt.email}
+                                {pt.email || 'Não informado'}
                               </p>
                             </div>
                           </td>

@@ -1082,12 +1082,100 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
   // Patient Handlers
   const handleSavePatient = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!patientForm.name.trim()) {
+      alert("O nome do paciente é obrigatório.");
+      return;
+    }
+
+    const isValidCPF = (cpfStr: string): boolean => {
+      const cleanCpf = cpfStr.replace(/\D/g, '');
+      if (cleanCpf.length !== 11) return false;
+      if (/^(\d)\1{10}$/.test(cleanCpf)) return false;
+      
+      let sum = 0;
+      let remainder;
+      
+      for (let i = 1; i <= 9; i++) {
+        sum += parseInt(cleanCpf.substring(i - 1, i)) * (11 - i);
+      }
+      remainder = (sum * 10) % 11;
+      if (remainder === 10 || remainder === 11) remainder = 0;
+      if (remainder !== parseInt(cleanCpf.substring(9, 10))) return false;
+      
+      sum = 0;
+      for (let i = 1; i <= 10; i++) {
+        sum += parseInt(cleanCpf.substring(i - 1, i)) * (12 - i);
+      }
+      remainder = (sum * 10) % 11;
+      if (remainder === 10 || remainder === 11) remainder = 0;
+      if (remainder !== parseInt(cleanCpf.substring(10, 11))) return false;
+      
+      return true;
+    };
+
+    const formatCPF = (cpfStr: string): string => {
+      const clean = cpfStr.replace(/\D/g, '');
+      if (clean.length !== 11) return cpfStr;
+      return `${clean.substring(0, 3)}.${clean.substring(3, 6)}.${clean.substring(6, 9)}-${clean.substring(9, 11)}`;
+    };
+
+    if (patientForm.cpf && patientForm.cpf.trim() !== '') {
+      if (!isValidCPF(patientForm.cpf)) {
+        alert("O CPF informado é inválido. Por favor, digite um CPF válido ou deixe o campo vazio.");
+        return;
+      }
+    }
+
+    if (patientForm.email && patientForm.email.trim() !== '') {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(patientForm.email.trim())) {
+        alert("O e-mail informado é inválido. Por favor, digite um e-mail válido ou deixe o campo vazio.");
+        return;
+      }
+    }
+
+    if (patientForm.phone && patientForm.phone.trim() !== '') {
+      const digits = patientForm.phone.replace(/\D/g, '');
+      if (digits.length < 8) {
+        alert("O telefone informado é muito curto. Por favor, digite um telefone válido (mínimo de 8 dígitos) ou deixe o campo vazio.");
+        return;
+      }
+    }
+
     try {
+      const clean = patientForm.cpf?.replace(/\D/g, '') || '';
+      const formattedCpf = clean.length === 11 ? formatCPF(patientForm.cpf) : (patientForm.cpf || '');
+      
+      const payload = {
+        ...patientForm,
+        cpf: formattedCpf,
+        // Legacy fields for English dashboard compatibility
+        name: patientForm.name,
+        email: patientForm.email || '',
+        phone: patientForm.phone || '',
+        dateOfBirth: patientForm.dateOfBirth || '',
+        address: patientForm.address || '',
+        notes: patientForm.notes || '',
+        createdAt: editingPatient ? (editingPatient.createdAt || Date.now()) : Date.now(),
+        recibos: editingPatient ? (editingPatient.recibos || []) : [],
+        history: editingPatient ? (editingPatient.history || '') : '',
+
+        // Portuguese fields for native DB consistency
+        nome: patientForm.name,
+        telefone: patientForm.phone || '',
+        whatsapp: patientForm.phone || '',
+        email_db: patientForm.email || '', // to avoid overwrite if separate
+        dataNascimento: patientForm.dateOfBirth || '',
+        observacoes: patientForm.notes || '',
+        status: editingPatient ? (editingPatient.status || 'Ativo') : 'Ativo',
+        updatedAt: Date.now()
+      };
+
       if (editingPatient) {
-        await contentService.updatePatient(editingPatient.id, patientForm);
+        await contentService.updatePatient(editingPatient.id, payload);
         alert('Cadastro de paciente atualizado!');
       } else {
-        await contentService.createPatient(patientForm);
+        await contentService.createPatient(payload);
         alert('Paciente cadastrado com sucesso!');
       }
       setIsPatientModalOpen(false);
@@ -1668,11 +1756,20 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
         {/* User Account bottom bar */}
         <div className={`p-4 border-t border-sand-200/80 space-y-3 ${isSidebarCollapsed ? 'lg:p-2 lg:flex lg:flex-col lg:items-center' : ''}`}>
           <div className="flex items-center gap-2.5 px-2">
-            <div className="h-8 w-8 rounded-full bg-sand-100 border border-sand-200 flex items-center justify-center font-bold text-xs font-mono text-sand-700 shrink-0 uppercase">
-              {user.email?.substring(0, 2)}
-            </div>
+            {dbAdminDoc?.photoURL || dbAdminDoc?.photoUrl || user?.photoURL ? (
+              <img 
+                src={dbAdminDoc?.photoURL || dbAdminDoc?.photoUrl || user?.photoURL}
+                alt="Foto de Perfil"
+                referrerPolicy="no-referrer"
+                className="h-8 w-8 rounded-full object-cover border border-sand-300 shadow-sm shrink-0"
+              />
+            ) : (
+              <div className="h-8 w-8 rounded-full bg-sand-100 border border-sand-200 flex items-center justify-center font-bold text-xs font-mono text-sand-700 shrink-0 uppercase">
+                {user.email?.substring(0, 2)}
+              </div>
+            )}
             <div className={`truncate ${isSidebarCollapsed ? 'lg:hidden' : 'block'}`}>
-              <p className="text-[11px] font-bold text-sand-950 truncate leading-tight">{user.displayName || 'Administrador'}</p>
+              <p className="text-[11px] font-bold text-sand-950 truncate leading-tight">{dbAdminDoc?.name || user.displayName || 'Administrador'}</p>
               <p className="text-[10px] font-mono text-sand-500 truncate">{user.email}</p>
             </div>
           </div>
@@ -3377,7 +3474,6 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
                     <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">E-mail</label>
                     <input
                       type="email"
-                      required
                       value={patientForm.email}
                       onChange={(e) => setPatientForm({ ...patientForm, email: e.target.value })}
                       className="w-full px-3 py-2 rounded-xl border border-sand-200 focus:outline-none"
@@ -3390,7 +3486,6 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
                     <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Telefone / WhatsApp</label>
                     <input
                       type="text"
-                      required
                       value={patientForm.phone}
                       onChange={(e) => setPatientForm({ ...patientForm, phone: e.target.value })}
                       placeholder="(85) 99999-9999"

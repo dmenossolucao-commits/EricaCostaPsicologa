@@ -64,7 +64,7 @@ export const PatientHeader: React.FC<PatientHeaderProps> = ({ patient }) => {
           <Phone size={14} className="text-sand-400 shrink-0" />
           <div>
             <p className="text-[9px] uppercase font-mono font-bold text-sand-400 tracking-wider">Telefone</p>
-            <p className="font-semibold font-mono">{patient.telefone || patient.phone}</p>
+            <p className="font-semibold font-mono">{patient.telefone || patient.phone || 'Não informado'}</p>
           </div>
         </div>
 
@@ -72,7 +72,7 @@ export const PatientHeader: React.FC<PatientHeaderProps> = ({ patient }) => {
           <Mail size={14} className="text-sand-400 shrink-0" />
           <div className="min-w-0">
             <p className="text-[9px] uppercase font-mono font-bold text-sand-400 tracking-wider">E-mail</p>
-            <p className="font-semibold truncate" title={patient.email}>{patient.email}</p>
+            <p className="font-semibold truncate" title={patient.email || 'Não informado'}>{patient.email || 'Não informado'}</p>
           </div>
         </div>
 

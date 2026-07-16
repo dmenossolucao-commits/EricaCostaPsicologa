@@ -12,7 +12,8 @@ service cloud.firestore {
         ) || (
           request.auth.token.email == 'ericacostapsicologa7@gmail.com' ||
           request.auth.token.email == 'd-briciod2@hotmail.com' ||
-          request.auth.token.email == 'admin@ericacostapsi.com.br'
+          request.auth.token.email == 'admin@ericacostapsi.com.br' ||
+          request.auth.token.email == 'dmenossolucao@gmail.com'
         )
       );
     }
