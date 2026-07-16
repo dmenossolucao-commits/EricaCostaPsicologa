@@ -24,6 +24,7 @@ import { DocumentUploader } from './DocumentUploader';
 import { DocumentViewer } from './DocumentViewer';
 import { ScannerCapture } from './ScannerCapture';
 import { STANDARD_CATEGORIES } from './CategorySelector';
+import { auth } from '../../../firebase';
 
 interface DocumentManagerProps {
   patient: Patient;
@@ -118,9 +119,20 @@ export const DocumentManager: React.FC<DocumentManagerProps> = ({ patient }) => 
     }
   };
 
-  // Force trigger browser file download proxy
+  // Force trigger browser file download proxy with strict authentication validation
   const handleDownloadFile = (docToDownload: PatientDocument) => {
     try {
+      const isAuthorized = auth.currentUser && (
+        auth.currentUser.email === 'ericacostapsicologa7@gmail.com' ||
+        auth.currentUser.email === 'd-briciod2@hotmail.com' ||
+        auth.currentUser.email === 'admin@ericacostapsi.com.br'
+      );
+
+      if (!isAuthorized) {
+        alert('Acesso Negado: Você precisa estar autenticado como administrador autorizado para baixar arquivos clínicos.');
+        return;
+      }
+
       const link = document.createElement('a');
       link.href = docToDownload.downloadURL;
       link.download = docToDownload.fileName;

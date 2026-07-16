@@ -18,6 +18,14 @@ export const SessionCard: React.FC<SessionCardProps> = ({
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
+  const renderFormattedContent = (content: string) => {
+    if (!content) return { __html: '' };
+    if (content.trim().startsWith('<') || content.includes('</')) {
+      return { __html: content };
+    }
+    return { __html: content.replace(/\n/g, '<br />') };
+  };
+
   const formatDate = (dateStr: string) => {
     try {
       const [year, month, day] = dateStr.split('-');
@@ -143,9 +151,10 @@ export const SessionCard: React.FC<SessionCardProps> = ({
                   <FileText size={11} />
                   <span>Evolução Clínica & Intervenções</span>
                 </span>
-                <div className="bg-white p-4 rounded-xl border border-sand-200/60 leading-relaxed whitespace-pre-wrap text-sand-900 shadow-sm font-mono text-[11px]">
-                  {record.clinicalEvolution}
-                </div>
+                <div 
+                  className="bg-white p-4 rounded-xl border border-sand-200/60 leading-relaxed text-sand-900 shadow-sm font-sans text-[11px] [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_h1]:text-base [&_h1]:font-bold [&_h1]:mt-2 [&_h2]:text-sm [&_h2]:font-bold [&_h2]:mt-2 [&_h3]:text-xs [&_h3]:font-bold [&_h3]:mt-1"
+                  dangerouslySetInnerHTML={renderFormattedContent(record.clinicalEvolution)}
+                />
               </div>
 
               {/* Obs & Plan side-by-side */}

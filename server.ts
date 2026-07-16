@@ -103,6 +103,32 @@ const db = {
 const app = express();
 const PORT = 3000;
 
+// Security Middleware: HTTPS redirection and strict security headers (CSP, HSTS, XSS, nosniff, frame-ancestors)
+app.use((req, res, next) => {
+  // Enforce HTTPS in production
+  if (process.env.NODE_ENV === "production" && req.headers["x-forwarded-proto"] !== "https") {
+    return res.redirect(`https://${req.headers.host}${req.url}`);
+  }
+
+  // Security Headers
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+  
+  // Custom Content Security Policy supporting both internal assets, CDNs, and Google AI Studio framing
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self' https: 'unsafe-inline' 'unsafe-eval' data: blob:; " +
+    "img-src 'self' https: data: blob:; " +
+    "media-src 'self' https: data: blob:; " +
+    "connect-src 'self' https: wss:; " +
+    "frame-src 'self' https:; " +
+    "frame-ancestors 'self' https://*.google.com https://*.googleusercontent.com https://*.run.app https://ai.studio https://*.preview.googleusercontent.com https://*.web.app;"
+  );
+
+  next();
+});
+
 app.use(express.json());
 
 // API routes go here FIRST

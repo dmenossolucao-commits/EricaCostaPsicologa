@@ -199,7 +199,7 @@ export interface AuditLog {
   id: string;
   userId: string;
   email: string;
-  action: 'LOGIN' | 'LOGOUT' | 'UPLOAD' | 'DOWNLOAD' | 'DELETE' | 'UPDATE' | 'PRINT' | 'RESTORE' | 'BACKUP_CREATE' | 'BACKUP_RESTORE' | 'TRASH_RESTORE' | 'TRASH_DELETE';
+  action: 'LOGIN' | 'LOGOUT' | 'UPLOAD' | 'DOWNLOAD' | 'DELETE' | 'UPDATE' | 'PRINT' | 'RESTORE' | 'BACKUP_CREATE' | 'BACKUP_RESTORE' | 'TRASH_RESTORE' | 'TRASH_DELETE' | 'BLOCKED_ATTEMPT' | 'NEW_DEVICE_ALERT';
   details: string;
   timestamp: number;
   ip: string;

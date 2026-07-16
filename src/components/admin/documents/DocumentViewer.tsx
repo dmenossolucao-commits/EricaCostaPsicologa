@@ -1,6 +1,7 @@
 import React from 'react';
 import { X, Download, FileText, Calendar, User, HardDrive, Paperclip, Music } from 'lucide-react';
 import { PatientDocument } from '../../../types';
+import { auth } from '../../../firebase';
 
 interface DocumentViewerProps {
   document: PatientDocument;
@@ -13,6 +14,35 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   onClose,
   onDownload,
 }) => {
+  // Check authorization - only active authenticated admin users can open clinical files
+  const isAuthorized = auth.currentUser && (
+    auth.currentUser.email === 'ericacostapsicologa7@gmail.com' ||
+    auth.currentUser.email === 'd-briciod2@hotmail.com' ||
+    auth.currentUser.email === 'admin@ericacostapsi.com.br'
+  );
+
+  if (!isAuthorized) {
+    return (
+      <div className="fixed inset-0 bg-sand-950/90 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-3xl border border-rose-200 shadow-2xl p-8 max-w-md w-full text-center space-y-4">
+          <div className="h-16 w-16 bg-rose-50 text-rose-600 rounded-full flex items-center justify-center mx-auto border border-rose-100">
+            <X size={32} />
+          </div>
+          <h3 className="text-lg font-serif font-bold text-rose-950">Acesso Negado</h3>
+          <p className="text-xs text-sand-600 leading-relaxed">
+            Sessão expirada ou não autorizada. Cada documento clínico do MenteCare deve ser validado e autorizado individualmente por um administrador autenticado antes de ser exibido.
+          </p>
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold font-mono uppercase tracking-wider rounded-xl transition-colors cursor-pointer"
+          >
+            Fechar
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const isImage = doc.fileType.startsWith('image/');
   const isPdf = doc.fileType === 'application/pdf';
   const isAudio = doc.fileType.startsWith('audio/') || ['mp3', 'wav', 'm4a'].includes(doc.fileType.split('/')[1] || '');

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Save, X, Calendar, Clock, Sparkles, AlertCircle, FileText, Lock, Plus, Trash2, Paperclip, CheckSquare, Square, Loader2 } from 'lucide-react';
 import { PatientRecord, PatientDocument } from '../../types';
 import { contentService } from '../../services/contentService';
+import { RichTextEditor } from './RichTextEditor';
 
 interface EvolutionFormProps {
   initialRecord?: PatientRecord | null;
@@ -63,7 +64,8 @@ export const EvolutionForm: React.FC<EvolutionFormProps> = ({
 
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!clinicalEvolution.trim()) {
+    const isEvolutionEmpty = !clinicalEvolution || clinicalEvolution.replace(/<[^>]*>/g, '').trim() === '';
+    if (isEvolutionEmpty) {
       alert("O campo 'Evolução clínica' é obrigatório.");
       return;
     }
@@ -218,12 +220,10 @@ export const EvolutionForm: React.FC<EvolutionFormProps> = ({
           <label className="text-[9px] font-bold text-sand-500 uppercase font-mono block mb-1">
             Evolução Clínica * (Histórico e Progresso Psicoterapêutico)
           </label>
-          <textarea
-            required
+          <RichTextEditor
             value={clinicalEvolution}
-            onChange={(e) => setClinicalEvolution(e.target.value)}
+            onChange={setClinicalEvolution}
             placeholder="Descreva as queixas relatadas, as intervenções técnicas realizadas, as reações emocionais expressas e o progresso clínico observado..."
-            className="w-full min-h-[140px] px-3 py-2.5 border border-sand-200 rounded-xl focus:outline-none bg-white text-xs leading-relaxed"
           />
         </div>
 

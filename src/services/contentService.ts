@@ -401,33 +401,57 @@ export const contentService = {
     folder: string = 'site',
     onProgress?: (progress: number) => void
   ): Promise<string> {
-    const fileName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
-    const fileRef = ref(storage, `${folder}/${fileName}`);
-    const uploadTask = uploadBytesResumable(fileRef, file);
+    console.log(`[Firebase Upload Image] --- STARTING ---`);
+    console.log(`[Firebase Upload Image] File name: "${file.name}" | Size: ${file.size} bytes | MIME type: "${file.type}"`);
+    console.log(`[Firebase Upload Image] Target folder: "${folder}"`);
+    const currentUser = auth.currentUser;
+    console.log(`[Firebase Upload Image] Current User ID: "${currentUser?.uid || 'Not Authenticated'}" | Email: "${currentUser?.email || 'N/A'}"`);
+    console.log(`[Firebase Upload Image] Firebase Storage Bucket: "gs://${storage.app.options.storageBucket}"`);
 
-    return new Promise((resolve, reject) => {
-      uploadTask.on(
-        'state_changed',
-        (snapshot) => {
-          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-          if (onProgress) {
-            onProgress(Math.round(progress));
+    const fileName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+    const storagePath = `${folder}/${fileName}`;
+    const fileRef = ref(storage, storagePath);
+    console.log(`[Firebase Upload Image] Created reference path: "${storagePath}"`);
+
+    try {
+      console.log(`[Firebase Upload Image] Initiating uploadBytesResumable...`);
+      const uploadTask = uploadBytesResumable(fileRef, file);
+      console.log(`[Firebase Upload Image] uploadBytesResumable instance created successfully.`);
+
+      return new Promise((resolve, reject) => {
+        uploadTask.on(
+          'state_changed',
+          (snapshot) => {
+            const progress = snapshot.totalBytes > 0 
+              ? (snapshot.bytesTransferred / snapshot.totalBytes) * 100 
+              : 0;
+            console.log(`[Firebase Upload Image] Progress Snapshot: ${snapshot.bytesTransferred} of ${snapshot.totalBytes} bytes (${progress.toFixed(2)}%) | State: "${snapshot.state}"`);
+            if (onProgress) {
+              onProgress(Math.round(progress));
+            }
+          },
+          (error) => {
+            console.error(`[Firebase Upload Image] ❌ Upload failed with error:`, error);
+            console.error(`[Firebase Upload Image] Error Code: "${(error as any).code}" | Message: "${error.message}"`);
+            reject(error);
+          },
+          async () => {
+            console.log(`[Firebase Upload Image] ✅ Resumable upload finished. Retrieving download URL...`);
+            try {
+              const url = await getDownloadURL(uploadTask.snapshot.ref);
+              console.log(`[Firebase Upload Image] Successfully got download URL: "${url}"`);
+              resolve(url);
+            } catch (urlError: any) {
+              console.error(`[Firebase Upload Image] ❌ Error retrieving download URL:`, urlError);
+              reject(urlError);
+            }
           }
-        },
-        (error) => {
-          console.error("Storage upload failed:", error);
-          reject(error);
-        },
-        async () => {
-          try {
-            const url = await getDownloadURL(uploadTask.snapshot.ref);
-            resolve(url);
-          } catch (urlError) {
-            reject(urlError);
-          }
-        }
-      );
-    });
+        );
+      });
+    } catch (startError: any) {
+      console.error(`[Firebase Upload Image] ❌ Exception caught starting uploadBytesResumable:`, startError);
+      throw startError;
+    }
   },
 
   // Delete image from Firebase Storage
@@ -822,35 +846,57 @@ export const contentService = {
     originalName: string,
     onProgress?: (progress: number) => void
   ): Promise<{ downloadURL: string; storagePath: string }> {
+    console.log(`[Firebase Upload Document] --- STARTING ---`);
+    console.log(`[Firebase Upload Document] Original name: "${originalName}" | Size: ${file.size} bytes | Patient ID: "${patientId}"`);
+    const currentUser = auth.currentUser;
+    console.log(`[Firebase Upload Document] Current User ID: "${currentUser?.uid || 'Not Authenticated'}" | Email: "${currentUser?.email || 'N/A'}"`);
+    console.log(`[Firebase Upload Document] Firebase Storage Bucket: "gs://${storage.app.options.storageBucket}"`);
+
     // Sanitize the filename to prevent issues with special characters
     const sanitizedName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
     const storagePath = `patients/${patientId}/documents/${Date.now()}_${sanitizedName}`;
     const fileRef = ref(storage, storagePath);
-    const uploadTask = uploadBytesResumable(fileRef, file);
+    console.log(`[Firebase Upload Document] Created reference path: "${storagePath}"`);
 
-    return new Promise((resolve, reject) => {
-      uploadTask.on(
-        'state_changed',
-        (snapshot) => {
-          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-          if (onProgress) {
-            onProgress(Math.round(progress));
+    try {
+      console.log(`[Firebase Upload Document] Initiating uploadBytesResumable...`);
+      const uploadTask = uploadBytesResumable(fileRef, file);
+      console.log(`[Firebase Upload Document] uploadBytesResumable instance created successfully.`);
+
+      return new Promise((resolve, reject) => {
+        uploadTask.on(
+          'state_changed',
+          (snapshot) => {
+            const progress = snapshot.totalBytes > 0 
+              ? (snapshot.bytesTransferred / snapshot.totalBytes) * 100 
+              : 0;
+            console.log(`[Firebase Upload Document] Progress Snapshot: ${snapshot.bytesTransferred} of ${snapshot.totalBytes} bytes (${progress.toFixed(2)}%) | State: "${snapshot.state}"`);
+            if (onProgress) {
+              onProgress(Math.round(progress));
+            }
+          },
+          (error) => {
+            console.error(`[Firebase Upload Document] ❌ Upload failed with error:`, error);
+            console.error(`[Firebase Upload Document] Error Code: "${(error as any).code}" | Message: "${error.message}"`);
+            reject(error);
+          },
+          async () => {
+            console.log(`[Firebase Upload Document] ✅ Resumable upload finished. Retrieving download URL...`);
+            try {
+              const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+              console.log(`[Firebase Upload Document] Successfully got download URL: "${downloadURL}"`);
+              resolve({ downloadURL, storagePath });
+            } catch (urlError: any) {
+              console.error(`[Firebase Upload Document] ❌ Error retrieving download URL:`, urlError);
+              reject(urlError);
+            }
           }
-        },
-        (error) => {
-          console.error("Storage upload of document failed:", error);
-          reject(error);
-        },
-        async () => {
-          try {
-            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-            resolve({ downloadURL, storagePath });
-          } catch (urlError) {
-            reject(urlError);
-          }
-        }
-      );
-    });
+        );
+      });
+    } catch (startError: any) {
+      console.error(`[Firebase Upload Document] ❌ Exception caught starting uploadBytesResumable:`, startError);
+      throw startError;
+    }
   },
 
   async deleteDocumentFile(storagePath: string): Promise<void> {

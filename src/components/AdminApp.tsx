@@ -4,7 +4,7 @@ import {
   RefreshCw, Plus, Ban, DollarSign, Users, ExternalLink, CheckCircle2, AlertCircle, 
   Clock, Image as ImageIcon, Settings, Upload, FileText, Sparkles, Save, BookOpen, 
   LogOut, ChevronRight, ChevronLeft, User, Search, MapPin, Eye, Edit3, Lock, PlusCircle, CreditCard,
-  Menu
+  Menu, ShieldCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useSiteContent } from '../context/SiteContext';
@@ -26,6 +26,9 @@ import { PatientManager } from './admin/PatientManager';
 import AgendaTab from './admin/AgendaTab';
 import FinanceiroTab from './admin/FinanceiroTab';
 import BackupTab from './admin/BackupTab';
+import { SecurityPanel } from './admin/SecurityPanel';
+import { TwoFactorVerificationScreen } from './admin/TwoFactorVerificationScreen';
+import { logAuditAction, detectClientInfo } from '../services/contentService';
 
 const ADMIN_EMAILS = [
   'd-briciod2@hotmail.com',
@@ -45,16 +48,16 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
   const getActiveTabFromPath = (path: string) => {
     if (path.startsWith('/admin/')) {
       const subPath = path.substring(7); // '/admin/' has 7 characters
-      const validTabs = ['dashboard', 'perfil', 'fotos', 'agenda', 'pacientes', 'mensagens', 'blog', 'pagamentos', 'configuracoes', 'minhaconta'];
+      const validTabs = ['dashboard', 'perfil', 'fotos', 'agenda', 'pacientes', 'mensagens', 'blog', 'pagamentos', 'configuracoes', 'minhaconta', 'seguranca'];
       if (validTabs.includes(subPath)) {
-        return subPath as 'dashboard' | 'perfil' | 'fotos' | 'agenda' | 'pacientes' | 'mensagens' | 'blog' | 'pagamentos' | 'configuracoes' | 'minhaconta';
+        return subPath as 'dashboard' | 'perfil' | 'fotos' | 'agenda' | 'pacientes' | 'mensagens' | 'blog' | 'pagamentos' | 'configuracoes' | 'minhaconta' | 'seguranca';
       }
     }
     return 'dashboard';
   };
 
   const [activeTab, setActiveTab] = useState<
-    'dashboard' | 'perfil' | 'fotos' | 'agenda' | 'pacientes' | 'mensagens' | 'blog' | 'pagamentos' | 'configuracoes' | 'minhaconta'
+    'dashboard' | 'perfil' | 'fotos' | 'agenda' | 'pacientes' | 'mensagens' | 'blog' | 'pagamentos' | 'configuracoes' | 'minhaconta' | 'seguranca'
   >(() => getActiveTabFromPath(currentPath));
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -70,7 +73,7 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
       const path = currentPath;
       if (path.startsWith('/admin/')) {
         const subPath = path.substring(7); // '/admin/' has 7 characters
-        const validTabs = ['dashboard', 'perfil', 'fotos', 'agenda', 'pacientes', 'mensagens', 'blog', 'pagamentos', 'configuracoes', 'minhaconta'];
+        const validTabs = ['dashboard', 'perfil', 'fotos', 'agenda', 'pacientes', 'mensagens', 'blog', 'pagamentos', 'configuracoes', 'minhaconta', 'seguranca'];
         if (validTabs.includes(subPath)) {
           setActiveTab(subPath as any);
         }
@@ -86,6 +89,65 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
   const [dbAdminDoc, setDbAdminDoc] = useState<any>(null);
   const [isAdminChecking, setIsAdminChecking] = useState(true);
   const [prevUserUid, setPrevUserUid] = useState<string | null>(null);
+
+  // 2FA State Manager
+  const [isTwoFactorVerified, setIsTwoFactorVerified] = useState<boolean>(() => {
+    return sessionStorage.getItem('mente_care_2fa_verified') === 'true';
+  });
+
+  // Inactivity timeout states
+  const [lastActiveTime, setLastActiveTime] = useState<number>(Date.now());
+  const [showInactivityWarning, setShowInactivityWarning] = useState<boolean>(false);
+  const [inactivityCountdown, setInactivityCountdown] = useState<number>(30);
+  const [sessionExpiredMessage, setSessionExpiredMessage] = useState<string>('');
+
+  // Inactivity Tracker Hook
+  useEffect(() => {
+    if (!user) return;
+
+    const resetInactivityTimer = () => {
+      setLastActiveTime(Date.now());
+      if (showInactivityWarning) {
+        setShowInactivityWarning(false);
+        setInactivityCountdown(30);
+      }
+    };
+
+    window.addEventListener('mousemove', resetInactivityTimer);
+    window.addEventListener('keydown', resetInactivityTimer);
+    window.addEventListener('click', resetInactivityTimer);
+    window.addEventListener('scroll', resetInactivityTimer);
+    window.addEventListener('touchstart', resetInactivityTimer);
+
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - lastActiveTime;
+      const timeoutLimit = 15 * 60 * 1000; // 15 minutes session timeout
+      const warningThreshold = timeoutLimit - 30 * 1000; // Show popup at 14m 30s
+
+      if (elapsed >= timeoutLimit) {
+        clearInterval(interval);
+        // Logout immediately
+        logout();
+        setIsTwoFactorVerified(false);
+        sessionStorage.removeItem('mente_care_2fa_verified');
+        setSessionExpiredMessage('Sua sessão administrativa foi encerrada automaticamente por inatividade de 15 minutos para garantir a confidencialidade dos prontuários clínicos.');
+        setShowInactivityWarning(false);
+      } else if (elapsed >= warningThreshold) {
+        setShowInactivityWarning(true);
+        const secondsLeft = Math.ceil((timeoutLimit - elapsed) / 1000);
+        setInactivityCountdown(secondsLeft > 0 ? secondsLeft : 0);
+      }
+    }, 1000);
+
+    return () => {
+      window.removeEventListener('mousemove', resetInactivityTimer);
+      window.removeEventListener('keydown', resetInactivityTimer);
+      window.removeEventListener('click', resetInactivityTimer);
+      window.removeEventListener('scroll', resetInactivityTimer);
+      window.removeEventListener('touchstart', resetInactivityTimer);
+      clearInterval(interval);
+    };
+  }, [user, lastActiveTime, showInactivityWarning]);
 
   if (user && user.uid !== prevUserUid) {
     setPrevUserUid(user.uid);
@@ -228,6 +290,35 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
           const data = docSnap.data();
           if (data && data.profile === 'admin' && data.status === 'active') {
             setDbAdminDoc(data);
+            
+            // Check for new device alert
+            try {
+              const clientInfo = await detectClientInfo();
+              const knownDevices = data.knownDevices || [];
+              const isDeviceKnown = knownDevices.some((d: any) => d.os === clientInfo.os && d.browser === clientInfo.browser);
+              
+              if (!isDeviceKnown && knownDevices.length > 0) {
+                const updatedDevices = [...knownDevices, { os: clientInfo.os, browser: clientInfo.browser, timestamp: Date.now() }];
+                await updateDoc(docRef, { knownDevices: updatedDevices });
+                try {
+                  await updateDoc(doc(db, 'admins', user.email || ''), { knownDevices: updatedDevices });
+                } catch (e) {}
+                
+                await logAuditAction('NEW_DEVICE_ALERT', `Acesso por novo dispositivo detectado: ${clientInfo.os} (${clientInfo.browser}).`);
+                setTimeout(() => {
+                  alert(`⚠️ ALERTA DE SEGURANÇA MENTECARE\n\nDetectamos que a sua conta foi acessada por um dispositivo não registrado anteriormente:\n\n💻 Dispositivo: ${clientInfo.os}\n🌐 Navegador: ${clientInfo.browser}\n📍 IP de Origem: ${clientInfo.ip}\n\nEnviamos um e-mail de alerta oficial de segurança para seu endereço ${user.email}. Caso não tenha sido você, altere sua senha imediatamente no menu administrativo.`);
+                }, 1000);
+              } else if (knownDevices.length === 0) {
+                const updatedDevices = [{ os: clientInfo.os, browser: clientInfo.browser, timestamp: Date.now() }];
+                await updateDoc(docRef, { knownDevices: updatedDevices });
+                try {
+                  await updateDoc(doc(db, 'admins', user.email || ''), { knownDevices: updatedDevices });
+                } catch (e) {}
+              }
+            } catch (deviceErr) {
+              console.error("Erro ao validar dispositivo de acesso:", deviceErr);
+            }
+
           } else {
             setDbAdminDoc(null);
           }
@@ -746,31 +837,106 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
   // Authentication Handlers
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    const loginEmail = emailInput.trim().toLowerCase();
+    
     setAuthLoading(true);
     setAuthError('');
+
     try {
-      await signInWithEmailAndPassword(auth, emailInput.trim(), passwordInput);
+      // 1. Check if locked out in Firestore or LocalStorage
+      const attemptDocRef = doc(db, 'login_attempts', loginEmail);
+      const attemptSnap = await getDoc(attemptDocRef);
+      const localLock = localStorage.getItem(`mente_lock_${loginEmail}`);
+      
+      let isLocked = false;
+      let lockUntilTime = 0;
+
+      if (attemptSnap.exists()) {
+        const attemptData = attemptSnap.data();
+        if (attemptData.lockedUntil && attemptData.lockedUntil > Date.now()) {
+          isLocked = true;
+          lockUntilTime = attemptData.lockedUntil;
+        }
+      }
+
+      if (localLock) {
+        const localTime = parseInt(localLock, 10);
+        if (localTime > Date.now()) {
+          isLocked = true;
+          lockUntilTime = Math.max(lockUntilTime, localTime);
+        }
+      }
+
+      if (isLocked) {
+        const minutesLeft = Math.ceil((lockUntilTime - Date.now()) / (60 * 1000));
+        setAuthError(`Esta conta está bloqueada temporariamente devido a 5 tentativas consecutivas de login incorretas. Tente novamente em ${minutesLeft} minutos.`);
+        setAuthLoading(false);
+        return;
+      }
+
+      // 2. Perform signIn
+      await signInWithEmailAndPassword(auth, loginEmail, passwordInput);
+      
+      // 3. Reset login attempts on success
+      try {
+        await setDoc(attemptDocRef, {
+          attemptsCount: 0,
+          lockedUntil: null,
+          lastAttemptAt: Date.now()
+        });
+        localStorage.removeItem(`mente_lock_${loginEmail}`);
+        localStorage.removeItem(`mente_attempts_${loginEmail}`);
+      } catch (e) {}
+
     } catch (err: any) {
       console.error("Erro no login:", err);
-      if (emailInput.trim().toLowerCase() === 'ericacostapsicologa7@gmail.com') {
-        setAuthError('E-mail ou senha incorretos. Caso seja seu primeiro acesso e sua conta do Firebase ainda não tenha sido ativada, a opção "Configuração de Primeiro Acesso" foi liberada logo abaixo para que você possa configurá-la de forma automática.');
-        setFirstAdminExists(false);
-      } else {
+      
+      // 4. Handle failed attempt
+      try {
+        const attemptDocRef = doc(db, 'login_attempts', loginEmail);
+        const attemptSnap = await getDoc(attemptDocRef);
+        let count = 1;
+
+        if (attemptSnap.exists()) {
+          count = (attemptSnap.data().attemptsCount || 0) + 1;
+        } else {
+          const localCountStr = localStorage.getItem(`mente_attempts_${loginEmail}`);
+          if (localCountStr) {
+            count = parseInt(localCountStr, 10) + 1;
+          }
+        }
+
+        if (count >= 5) {
+          const lockTime = Date.now() + 15 * 60 * 1000;
+          await setDoc(attemptDocRef, {
+            attemptsCount: count,
+            lockedUntil: lockTime,
+            lastAttemptAt: Date.now()
+          });
+          localStorage.setItem(`mente_lock_${loginEmail}`, lockTime.toString());
+          localStorage.setItem(`mente_attempts_${loginEmail}`, count.toString());
+          
+          await logAuditAction('BLOCKED_ATTEMPT', `Conta de e-mail ${loginEmail} foi bloqueada temporariamente por 15 minutos após exceder 5 tentativas consecutivas.`);
+          
+          setAuthError('Esta conta foi temporariamente bloqueada por 15 minutos por exceder 5 tentativas consecutivas de login incorretas.');
+        } else {
+          await setDoc(attemptDocRef, {
+            attemptsCount: count,
+            lockedUntil: null,
+            lastAttemptAt: Date.now()
+          });
+          localStorage.setItem(`mente_attempts_${loginEmail}`, count.toString());
+          
+          setAuthError(`E-mail ou senha incorretos. Tentativa ${count} de 5 antes do bloqueio de segurança.`);
+        }
+      } catch (dbErr) {
+        console.error("Erro ao gerenciar tentativas de login no banco de dados:", dbErr);
         setAuthError('E-mail ou senha incorretos. Por favor, tente novamente.');
       }
-    } finally {
-      setAuthLoading(false);
-    }
-  };
 
-  const handleGoogleLogin = async () => {
-    setAuthLoading(true);
-    setAuthError('');
-    try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-    } catch (err: any) {
-      setAuthError('Ocorreu um erro ao fazer login com o Google.');
+      if (loginEmail === 'ericacostapsicologa7@gmail.com') {
+        setFirstAdminExists(false);
+      }
     } finally {
       setAuthLoading(false);
     }
@@ -1163,6 +1329,13 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
             <p className="text-xs text-sand-600 font-medium">Faça login para gerenciar a clínica e o conteúdo do site.</p>
           </div>
 
+          {sessionExpiredMessage && (
+            <div className="p-3.5 bg-amber-50 text-amber-800 rounded-xl border border-amber-200 text-xs flex gap-2 items-center leading-relaxed">
+              <AlertCircle size={16} className="shrink-0 text-amber-600" />
+              <span>{sessionExpiredMessage}</span>
+            </div>
+          )}
+
           {authError && (
             <div className="p-3.5 bg-rose-50 text-rose-800 rounded-xl border border-rose-100 text-xs flex gap-2 items-center leading-relaxed">
               <AlertCircle size={16} className="shrink-0" />
@@ -1272,24 +1445,6 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
                 {authLoading ? <RefreshCw className="animate-spin" size={14} /> : <Lock size={14} />}
                 <span>Entrar</span>
               </button>
-
-              <div className="relative flex py-1 items-center">
-                <div className="flex-grow border-t border-sand-200"></div>
-                <span className="flex-shrink mx-4 text-[10px] font-bold text-sand-400 uppercase font-mono">Ou</span>
-                <div className="flex-grow border-t border-sand-200"></div>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleGoogleLogin}
-                disabled={authLoading}
-                className="w-full py-2.5 border border-sand-300 hover:bg-sand-50 text-sand-800 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow-sm cursor-pointer transition-colors bg-white"
-              >
-                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
-                  <path fill="#EA4335" d="M12.24 10.285V14.4h6.887c-.275 1.565-1.88 4.604-6.887 4.604-4.33 0-7.859-3.578-7.859-8s3.529-8 7.859-8c2.46 0 4.105 1.025 5.047 1.926l3.227-3.11C18.281 1.09 15.542 0 12.24 0 5.582 0 .18 5.4.18 12s5.402 12 12.06 12c6.945 0 11.56-4.887 11.56-11.777 0-.792-.084-1.4-.188-1.938H12.24z"/>
-                </svg>
-                <span>Acessar com Google</span>
-              </button>
             </form>
           )}
 
@@ -1396,6 +1551,25 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
     );
   }
 
+  // 2FA INTERCEPTION
+  const needs2FA = user && dbAdminDoc?.twoFactorEnabled && !isTwoFactorVerified;
+  if (needs2FA) {
+    return (
+      <TwoFactorVerificationScreen
+        dbAdminDoc={dbAdminDoc}
+        onVerified={() => {
+          setIsTwoFactorVerified(true);
+          sessionStorage.setItem('mente_care_2fa_verified', 'true');
+        }}
+        onCancel={() => {
+          logout();
+          setIsTwoFactorVerified(false);
+          sessionStorage.removeItem('mente_care_2fa_verified');
+        }}
+      />
+    );
+  }
+
   // SIDEBAR SECTIONS RENDERING HELPERS
   const formatMoney = (v: number) => {
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
@@ -1471,7 +1645,8 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
               { id: 'blog', label: 'Blog & Conteúdo', icon: <BookOpen size={15} /> },
               { id: 'pagamentos', label: 'Pagamentos & Finanças', icon: <CreditCard size={15} /> },
               { id: 'configuracoes', label: 'Configurações', icon: <Settings size={15} /> },
-              { id: 'minhaconta', label: 'Minha Conta', icon: <User size={15} /> }
+              { id: 'minhaconta', label: 'Minha Conta', icon: <User size={15} /> },
+              { id: 'seguranca', label: 'Segurança', icon: <ShieldCheck size={15} /> }
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -3125,6 +3300,32 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
               </motion.div>
             )}
 
+            {/* 11. SEGURANÇA TAB */}
+            {activeTab === 'seguranca' && (
+              <motion.div
+                key="tab-seguranca"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+              >
+                <SecurityPanel
+                  user={user}
+                  dbAdminDoc={dbAdminDoc}
+                  onRefreshAdminDoc={async () => {
+                    try {
+                      const docRef = doc(db, 'admins', user.uid);
+                      const docSnap = await getDoc(docRef);
+                      if (docSnap.exists()) {
+                        setDbAdminDoc(docSnap.data());
+                      }
+                    } catch (e) {
+                      console.error("Erro ao atualizar admin doc:", e);
+                    }
+                  }}
+                />
+              </motion.div>
+            )}
+
           </AnimatePresence>
         </div>
 
@@ -3341,6 +3542,40 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* C. INACTIVITY WARNING OVERLAY */}
+      <AnimatePresence>
+        {showInactivityWarning && (
+          <div className="fixed inset-0 bg-sand-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white p-6 rounded-3xl border border-sand-200 max-w-sm w-full text-center space-y-4 shadow-2xl relative"
+            >
+              <div className="inline-flex p-3 bg-rose-50 text-rose-700 rounded-full border border-rose-100 animate-bounce">
+                <Clock size={28} />
+              </div>
+              <div className="space-y-1.5">
+                <h4 className="font-serif font-bold text-sand-950 text-base">Sessão Expirando</h4>
+                <p className="text-xs text-sand-600 leading-relaxed">
+                  Por motivos de segurança e sigilo clínico do CFP, sua sessão inativa será encerrada em <strong className="text-rose-600 font-mono text-sm">{inactivityCountdown}</strong> segundos.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setLastActiveTime(Date.now());
+                  setShowInactivityWarning(false);
+                  setInactivityCountdown(30);
+                }}
+                className="w-full py-2.5 bg-sage-700 hover:bg-sage-800 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
+              >
+                Continuar Conectado
+              </button>
             </motion.div>
           </div>
         )}
