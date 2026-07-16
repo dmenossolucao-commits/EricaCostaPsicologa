@@ -108,5 +108,10 @@ service cloud.firestore {
     match /trash_bin/{document} {
       allow read, write: if isAdmin();
     }
+
+    // Login attempts: anyone can read/write to allow lockout security tracking before authenticating
+    match /login_attempts/{document} {
+      allow read, write: if true;
+    }
   }
 }

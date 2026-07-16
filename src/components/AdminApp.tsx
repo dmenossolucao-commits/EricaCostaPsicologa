@@ -556,7 +556,7 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
     setSetupMessage('Iniciando criação da conta administrativa...');
     try {
       const adminEmail = "ericacostapsicologa7@gmail.com";
-      const adminPassword = "34932509Erica";
+      const adminPassword = "Fa486875";
       const adminName = "Erica Costa";
       
       const apiKey = auth.app.options.apiKey;
@@ -597,10 +597,47 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
             setSetupMessage('Usuário já existe. Vinculando documento no Firestore...');
           } else {
             const signInErr = await signInResponse.json();
-            if (signInErr.error && signInErr.error.message === "INVALID_LOGIN_CREDENTIALS") {
-              setSetupStatus('error');
-              setSetupMessage('O usuário já existe com outra senha. Por favor, tente redefinir sua senha.');
-              return;
+            if (signInErr.error && (signInErr.error.message === "INVALID_LOGIN_CREDENTIALS" || signInErr.error.message === "INVALID_PASSWORD")) {
+              // Try signing in with the old default password to migrate it to the new password automatically
+              setSetupMessage('Senha antiga detectada. Migrando senha para Fa486875...');
+              const oldSignInResponse = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  email: adminEmail,
+                  password: "34932509Erica",
+                  returnSecureToken: true
+                })
+              });
+              
+              if (oldSignInResponse.ok) {
+                const oldSignInData = await oldSignInResponse.json();
+                
+                // Update password to the new one (Fa486875)
+                const updatePassResponse = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:update?key=${apiKey}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    idToken: oldSignInData.idToken,
+                    password: adminPassword,
+                    returnSecureToken: true
+                  })
+                });
+                
+                if (updatePassResponse.ok) {
+                  uid = oldSignInData.localId;
+                  setSetupMessage('Senha atualizada com sucesso para Fa486875! Vinculando documento no Firestore...');
+                } else {
+                  const updateErr = await updatePassResponse.json();
+                  setSetupStatus('error');
+                  setSetupMessage(`Erro ao atualizar para a nova senha: ${updateErr.error?.message || 'Erro desconhecido'}`);
+                  return;
+                }
+              } else {
+                setSetupStatus('error');
+                setSetupMessage('A conta já existe com outra senha personalizada. Use o link "Esqueci minha senha" para redefinir sua senha.');
+                return;
+              }
             } else {
               setSetupStatus('error');
               setSetupMessage(`Erro ao validar conta: ${signInErr.error?.message || 'Erro desconhecido'}`);
@@ -842,96 +879,114 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
     setAuthLoading(true);
     setAuthError('');
 
-    try {
-      // 1. Check if locked out in Firestore or LocalStorage
-      const attemptDocRef = doc(db, 'login_attempts', loginEmail);
-      const attemptSnap = await getDoc(attemptDocRef);
-      const localLock = localStorage.getItem(`mente_lock_${loginEmail}`);
-      
-      let isLocked = false;
-      let lockUntilTime = 0;
+    let attemptSnap: any = null;
+    let isLocked = false;
+    let lockUntilTime = 0;
 
-      if (attemptSnap.exists()) {
+    // 1. Try to fetch lock status from Firestore safely (will not crash if permission denied)
+    try {
+      const attemptDocRef = doc(db, 'login_attempts', loginEmail);
+      attemptSnap = await getDoc(attemptDocRef);
+      if (attemptSnap && attemptSnap.exists()) {
         const attemptData = attemptSnap.data();
         if (attemptData.lockedUntil && attemptData.lockedUntil > Date.now()) {
           isLocked = true;
           lockUntilTime = attemptData.lockedUntil;
         }
       }
+    } catch (fsErr) {
+      console.warn("Could not check login attempts in Firestore (likely permission denied or rule missing):", fsErr);
+    }
 
-      if (localLock) {
-        const localTime = parseInt(localLock, 10);
-        if (localTime > Date.now()) {
-          isLocked = true;
-          lockUntilTime = Math.max(lockUntilTime, localTime);
-        }
+    // Check LocalStorage lockout
+    const localLock = localStorage.getItem(`mente_lock_${loginEmail}`);
+    if (localLock) {
+      const localTime = parseInt(localLock, 10);
+      if (localTime > Date.now()) {
+        isLocked = true;
+        lockUntilTime = Math.max(lockUntilTime, localTime);
       }
+    }
 
-      if (isLocked) {
-        const minutesLeft = Math.ceil((lockUntilTime - Date.now()) / (60 * 1000));
-        setAuthError(`Esta conta está bloqueada temporariamente devido a 5 tentativas consecutivas de login incorretas. Tente novamente em ${minutesLeft} minutos.`);
-        setAuthLoading(false);
-        return;
-      }
+    if (isLocked) {
+      const minutesLeft = Math.ceil((lockUntilTime - Date.now()) / (60 * 1000));
+      setAuthError(`Esta conta está bloqueada temporariamente devido a 5 tentativas consecutivas de login incorretas. Tente novamente em ${minutesLeft} minutos.`);
+      setAuthLoading(false);
+      return;
+    }
 
-      // 2. Perform signIn
+    try {
+      // 2. Perform actual signIn
       await signInWithEmailAndPassword(auth, loginEmail, passwordInput);
       
       // 3. Reset login attempts on success
       try {
+        const attemptDocRef = doc(db, 'login_attempts', loginEmail);
         await setDoc(attemptDocRef, {
           attemptsCount: 0,
           lockedUntil: null,
           lastAttemptAt: Date.now()
         });
-        localStorage.removeItem(`mente_lock_${loginEmail}`);
-        localStorage.removeItem(`mente_attempts_${loginEmail}`);
       } catch (e) {}
+      localStorage.removeItem(`mente_lock_${loginEmail}`);
+      localStorage.removeItem(`mente_attempts_${loginEmail}`);
 
     } catch (err: any) {
-      console.error("Erro no login:", err);
+      console.error("Erro no login real:", err);
       
       // 4. Handle failed attempt
-      try {
-        const attemptDocRef = doc(db, 'login_attempts', loginEmail);
-        const attemptSnap = await getDoc(attemptDocRef);
-        let count = 1;
-
-        if (attemptSnap.exists()) {
-          count = (attemptSnap.data().attemptsCount || 0) + 1;
-        } else {
-          const localCountStr = localStorage.getItem(`mente_attempts_${loginEmail}`);
-          if (localCountStr) {
-            count = parseInt(localCountStr, 10) + 1;
-          }
+      let count = 1;
+      
+      // Get previous count from Firestore or LocalStorage
+      if (attemptSnap && attemptSnap.exists()) {
+        count = (attemptSnap.data().attemptsCount || 0) + 1;
+      } else {
+        const localCountStr = localStorage.getItem(`mente_attempts_${loginEmail}`);
+        if (localCountStr) {
+          count = parseInt(localCountStr, 10) + 1;
         }
+      }
 
-        if (count >= 5) {
-          const lockTime = Date.now() + 15 * 60 * 1000;
+      const attemptDocRef = doc(db, 'login_attempts', loginEmail);
+
+      if (count >= 5) {
+        const lockTime = Date.now() + 15 * 60 * 1000;
+        try {
           await setDoc(attemptDocRef, {
             attemptsCount: count,
             lockedUntil: lockTime,
             lastAttemptAt: Date.now()
           });
-          localStorage.setItem(`mente_lock_${loginEmail}`, lockTime.toString());
-          localStorage.setItem(`mente_attempts_${loginEmail}`, count.toString());
-          
           await logAuditAction('BLOCKED_ATTEMPT', `Conta de e-mail ${loginEmail} foi bloqueada temporariamente por 15 minutos após exceder 5 tentativas consecutivas.`);
-          
-          setAuthError('Esta conta foi temporariamente bloqueada por 15 minutos por exceder 5 tentativas consecutivas de login incorretas.');
-        } else {
+        } catch (fsErr) {}
+        
+        localStorage.setItem(`mente_lock_${loginEmail}`, lockTime.toString());
+        localStorage.setItem(`mente_attempts_${loginEmail}`, count.toString());
+        
+        setAuthError('Esta conta foi temporariamente bloqueada por 15 minutos por exceder 5 tentativas consecutivas de login incorretas.');
+      } else {
+        try {
           await setDoc(attemptDocRef, {
             attemptsCount: count,
             lockedUntil: null,
             lastAttemptAt: Date.now()
           });
-          localStorage.setItem(`mente_attempts_${loginEmail}`, count.toString());
-          
-          setAuthError(`E-mail ou senha incorretos. Tentativa ${count} de 5 antes do bloqueio de segurança.`);
+        } catch (fsErr) {}
+        
+        localStorage.setItem(`mente_attempts_${loginEmail}`, count.toString());
+        
+        // Use nice Firebase errors if available, or fall back to standard message
+        let userFriendlyMsg = `E-mail ou senha incorretos. Tentativa ${count} de 5 antes do bloqueio de segurança.`;
+        if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+          userFriendlyMsg = `E-mail ou senha incorretos. Tentativa ${count} de 5 antes do bloqueio de segurança.`;
+        } else if (err.code === 'auth/too-many-requests') {
+          userFriendlyMsg = "Acesso temporariamente bloqueado devido a muitas tentativas malsucedidas. Tente novamente mais tarde ou recupere sua senha.";
+        } else if (err.message) {
+          // If other firebase auth error
+          userFriendlyMsg = `${err.message} (Tentativa ${count} de 5)`;
         }
-      } catch (dbErr) {
-        console.error("Erro ao gerenciar tentativas de login no banco de dados:", dbErr);
-        setAuthError('E-mail ou senha incorretos. Por favor, tente novamente.');
+        
+        setAuthError(userFriendlyMsg);
       }
 
       if (loginEmail === 'ericacostapsicologa7@gmail.com') {
