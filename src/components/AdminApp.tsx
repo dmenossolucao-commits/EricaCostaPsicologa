@@ -33,7 +33,8 @@ import { logAuditAction, detectClientInfo } from '../services/contentService';
 const ADMIN_EMAILS = [
   'd-briciod2@hotmail.com',
   'admin@ericacostapsi.com.br',
-  'ericacostapsicologa7@gmail.com'
+  'ericacostapsicologa7@gmail.com',
+  'dmenossolucao@gmail.com'
 ];
 
 interface AdminAppProps {
@@ -121,8 +122,8 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
 
     const interval = setInterval(() => {
       const elapsed = Date.now() - lastActiveTime;
-      const timeoutLimit = 15 * 60 * 1000; // 15 minutes session timeout
-      const warningThreshold = timeoutLimit - 30 * 1000; // Show popup at 14m 30s
+      const timeoutLimit = 60 * 60 * 1000; // 60 minutes (1 hour) session timeout
+      const warningThreshold = timeoutLimit - 30 * 1000; // Show popup at 59m 30s
 
       if (elapsed >= timeoutLimit) {
         clearInterval(interval);
@@ -130,7 +131,7 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
         logout();
         setIsTwoFactorVerified(false);
         sessionStorage.removeItem('mente_care_2fa_verified');
-        setSessionExpiredMessage('Sua sessão administrativa foi encerrada automaticamente por inatividade de 15 minutos para garantir a confidencialidade dos prontuários clínicos.');
+        setSessionExpiredMessage('Sua sessão administrativa foi encerrada automaticamente por inatividade de 60 minutos para garantir a confidencialidade dos prontuários clínicos.');
         setShowInactivityWarning(false);
       } else if (elapsed >= warningThreshold) {
         setShowInactivityWarning(true);
@@ -634,8 +635,16 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
                   return;
                 }
               } else {
-                setSetupStatus('error');
-                setSetupMessage('A conta já existe com outra senha personalizada. Use o link "Esqueci minha senha" para redefinir sua senha.');
+                setSetupMessage('Senha personalizada detectada. Enviando link de redefinição de senha...');
+                try {
+                  await sendPasswordResetEmail(auth, adminEmail);
+                  setSetupStatus('success');
+                  setSetupMessage('Sua conta já existe com uma senha personalizada. Para sua segurança, enviamos um link de redefinição de senha para o seu e-mail (ericacostapsicologa7@gmail.com). Por favor, acesse seu e-mail para criar uma nova senha e, em seguida, faça o login acima.');
+                } catch (resetErr: any) {
+                  console.error("Erro ao enviar redefinição de primeiro acesso:", resetErr);
+                  setSetupStatus('error');
+                  setSetupMessage('A conta já existe com outra senha personalizada. Tentamos enviar um e-mail de redefinição de senha automaticamente, mas ocorreu um erro. Por favor, utilize o link "Esqueci minha senha?" ao lado do campo "Senha de Segurança" acima para redefinir.');
+                }
                 return;
               }
             } else {
@@ -819,8 +828,11 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
       }
 
       // 2. Upload with progress callback
-      const url = await contentService.uploadImage(profilePhotoFile, 'admins', (progress) => {
+      const url = await contentService.uploadImage(profilePhotoFile, 'admins', (progress, status) => {
         setProfilePhotoProgress(progress);
+        if (status) {
+          console.log(`[Profile Photo Upload Progress] ${progress}% - ${status}`);
+        }
       });
 
       // 3. Update auth & Firestore docs
@@ -1062,9 +1074,9 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
     setUploadProgress(prev => ({ ...prev, [key]: 0 }));
 
     try {
-      const url = await contentService.uploadImage(file, 'site', (progress) => {
+      const url = await contentService.uploadImage(file, 'site', (progress, status) => {
         setUploadProgress(prev => ({ ...prev, [key]: progress }));
-        setUploadStatus(prev => ({ ...prev, [key]: `Enviando arquivo: ${progress}%` }));
+        setUploadStatus(prev => ({ ...prev, [key]: status || `Enviando arquivo: ${progress}%` }));
       });
 
       const updatedInfo = { ...siteContent.psychologist_info };
@@ -2089,13 +2101,14 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
                                   cx={cx}
                                   cy={cy}
                                   r="5"
-                                  className="fill-white stroke-softblue-500 stroke-[3px] hover:r-7 transition-all duration-200"
+                                  className="fill-white stroke-softblue-500 stroke-[3px] hover:scale-125 transition-transform duration-200"
+                                  style={{ transformOrigin: `${cx}px ${cy}px` }}
                                 />
                                 <text
                                   x={cx}
                                   y={cy - 12}
                                   textAnchor="middle"
-                                  className="text-[10px] font-mono font-bold fill-sand-900 opacity-0 group-hover/dot:opacity-100 transition-opacity"
+                                  className="text-[10px] font-mono font-bold fill-sand-900 opacity-0 group-hover/dot:opacity-100 transition-opacity pointer-events-none"
                                 >
                                   {m.count}
                                 </text>
@@ -2698,9 +2711,9 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
                                 setUploadStatus(prev => ({ ...prev, blog: 'Iniciando upload...' }));
                                 setUploadProgress(prev => ({ ...prev, blog: 0 }));
                                 try {
-                                  const url = await contentService.uploadImage(file, 'blog', (progress) => {
+                                  const url = await contentService.uploadImage(file, 'blog', (progress, status) => {
                                     setUploadProgress(prev => ({ ...prev, blog: progress }));
-                                    setUploadStatus(prev => ({ ...prev, blog: `Enviando: ${progress}%` }));
+                                    setUploadStatus(prev => ({ ...prev, blog: status || `Enviando: ${progress}%` }));
                                   });
                                   setPostImage(url);
                                   setUploadStatus(prev => ({ ...prev, blog: 'Sucesso! Imagem pronta.' }));

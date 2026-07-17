@@ -251,9 +251,13 @@ export const ScannerCapture: React.FC<ScannerCaptureProps> = ({
         onDocumentCaptured(savedDoc);
       }, 'image/jpeg', 0.9);
 
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error saving scanned doc:', err);
-      alert('Erro ao processar e salvar documento.');
+      if (err.message && err.message.includes('Firebase Storage')) {
+        alert(err.message);
+      } else {
+        alert('Erro ao processar e salvar documento.');
+      }
       setUploading(false);
     }
   };

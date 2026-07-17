@@ -2,11 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { 
   CreditCard, DollarSign, TrendingUp, Calendar, Users, Percent, CheckCircle, 
   XCircle, Clock, AlertCircle, FileText, Download, Printer, Plus, Trash2, Edit3, 
-  Search, Filter, Check, ShieldCheck, RefreshCw, ChevronLeft, ChevronRight, X
+  Search, Filter, Check, ShieldCheck, RefreshCw, ChevronLeft, ChevronRight, X,
+  QrCode, Copy, Upload, ArrowRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { FinancialTransaction, Patient, Appointment } from '../../types';
+import { FinancialTransaction, Patient, Appointment, PixConfig } from '../../types';
 import { contentService } from '../../services/contentService';
+import { generatePixCode, downloadQrCode } from '../../utils/pixGenerator';
 
 interface FinanceiroTabProps {
   patients: Patient[];
@@ -42,6 +44,28 @@ export default function FinanceiroTab({ patients, appointments, onRefresh, siteC
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
   const [receiptTx, setReceiptTx] = useState<FinancialTransaction | null>(null);
 
+  // Sub-tabs
+  const [activeSubTab, setActiveSubTab] = useState<'ledger' | 'pix'>('ledger');
+
+  // PIX Config State
+  const [pixConfig, setPixConfig] = useState<PixConfig | null>(null);
+  const [pixKeyType, setPixKeyType] = useState<string>('CPF');
+  const [pixKey, setPixKey] = useState<string>('');
+  const [pixReceiverName, setPixReceiverName] = useState<string>('');
+  const [pixReceiverCity, setPixReceiverCity] = useState<string>('');
+  const [pixBank, setPixBank] = useState<string>('');
+  const [pixLoading, setPixLoading] = useState<boolean>(false);
+  const [pixSuccessMsg, setPixSuccessMsg] = useState<string>('');
+  const [pixErrorMsg, setPixErrorMsg] = useState<string>('');
+
+  // Manual Billing generator state
+  const [billPatientId, setBillPatientId] = useState<string>('');
+  const [billCustomName, setBillCustomName] = useState<string>('');
+  const [billAmount, setBillAmount] = useState<number>(150);
+  const [billDescription, setBillDescription] = useState<string>('');
+  const [generatedPixCode, setGeneratedPixCode] = useState<string>('');
+  const [copiedManualPix, setCopiedManualPix] = useState<boolean>(false);
+
   // Reports selection
   const [reportType, setReportType] = useState<'monthly' | 'annual' | 'patient' | 'period'>('monthly');
   const [reportMonth, setReportMonth] = useState<string>(new Date().toISOString().substring(0, 7)); // YYYY-MM
@@ -64,9 +88,118 @@ export default function FinanceiroTab({ patients, appointments, onRefresh, siteC
     }
   };
 
+  const loadPixConfig = async () => {
+    try {
+      const config = await contentService.getPixConfig();
+      if (config) {
+        setPixConfig(config);
+        setPixKeyType(config.keyType || 'CPF');
+        setPixKey(config.key || '');
+        setPixReceiverName(config.receiverName || '');
+        setPixReceiverCity(config.receiverCity || '');
+        setPixBank(config.bank || '');
+      }
+    } catch (err) {
+      console.error("Error loading PIX config:", err);
+    }
+  };
+
   useEffect(() => {
     loadTransactions();
+    loadPixConfig();
   }, [appointments]); // Sync when appointments refresh
+
+  // Handle Save Pix Config
+  const handleSavePixConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPixLoading(true);
+    setPixSuccessMsg('');
+    setPixErrorMsg('');
+
+    if (!pixKey || !pixReceiverName || !pixReceiverCity) {
+      setPixErrorMsg('Chave PIX, Nome do Recebedor e Cidade do Recebedor são obrigatórios.');
+      setPixLoading(false);
+      return;
+    }
+
+    try {
+      const updated = await contentService.savePixConfig({
+        keyType: pixKeyType,
+        key: pixKey,
+        receiverName: pixReceiverName,
+        receiverCity: pixReceiverCity,
+        bank: pixBank
+      });
+      setPixConfig(updated);
+      setPixSuccessMsg('Configuração PIX atualizada com sucesso!');
+      setTimeout(() => setPixSuccessMsg(''), 3000);
+    } catch (err: any) {
+      setPixErrorMsg('Erro ao salvar configuração PIX: ' + (err.message || err));
+    } finally {
+      setPixLoading(false);
+    }
+  };
+
+  // Handle manual billing generation
+  const handleGenerateManualBill = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPixErrorMsg('');
+    setPixSuccessMsg('');
+
+    if (!pixConfig) {
+      setPixErrorMsg('Você precisa configurar sua chave PIX antes de gerar cobranças.');
+      return;
+    }
+
+    if (!billPatientId && !billCustomName) {
+      setPixErrorMsg('Por favor, selecione um paciente ou insira o nome do recebedor/paciente.');
+      return;
+    }
+
+    let patientName = billCustomName;
+    if (billPatientId) {
+      const pt = patients.find(p => p.id === billPatientId);
+      if (pt) {
+        patientName = pt.nome || pt.name;
+      }
+    }
+
+    const txId = "bill_" + Date.now().toString(36);
+
+    try {
+      // 1. Generate Copia e Cola Code
+      const code = generatePixCode({
+        key: pixConfig.key,
+        name: pixConfig.receiverName,
+        city: pixConfig.receiverCity,
+        amount: billAmount,
+        description: billDescription || `Consulta com ${pixConfig.receiverName}`,
+        transactionId: txId.toUpperCase()
+      });
+
+      setGeneratedPixCode(code);
+
+      // 2. Create Pendente Financial Transaction in Firestore
+      const txData: Omit<FinancialTransaction, 'id'> = {
+        patientId: billPatientId || 'avulso',
+        patientName,
+        amount: billAmount,
+        date: new Date().toISOString().substring(0, 10),
+        discount: 0,
+        status: 'Pendente',
+        paymentMethod: 'PIX',
+        notes: `${billDescription || 'Consulta'} (Cobrança PIX Gerada ID: ${txId})`,
+        createdAt: Date.now()
+      };
+
+      await contentService.createFinancialTransaction(txData);
+      setPixSuccessMsg('Cobrança PIX gerada e registrada no Livro de Lançamentos!');
+      await loadTransactions();
+      setTimeout(() => setPixSuccessMsg(''), 4000);
+    } catch (err: any) {
+      setPixErrorMsg('Erro ao gerar cobrança PIX: ' + (err.message || err));
+    }
+  };
 
   // Handle Save Transaction
   const handleSaveTx = async (e: React.FormEvent) => {
@@ -317,7 +450,47 @@ export default function FinanceiroTab({ patients, appointments, onRefresh, siteC
         </div>
       )}
 
-      {/* FINANCIAL INDICATORS DASHBOARD */}
+      {/* PIX Notifications */}
+      {pixSuccessMsg && (
+        <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl flex items-center gap-2 text-xs font-semibold animate-fade-in shadow-xs">
+          <CheckCircle size={15} className="text-emerald-600 shrink-0" />
+          <span>{pixSuccessMsg}</span>
+        </div>
+      )}
+      {pixErrorMsg && (
+        <div className="p-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl flex items-center gap-2 text-xs font-semibold animate-fade-in shadow-xs">
+          <AlertCircle size={15} className="text-rose-600 shrink-0" />
+          <span>{pixErrorMsg}</span>
+        </div>
+      )}
+
+      {/* Sub-tab Navigation */}
+      <div className="flex border-b border-sand-200 mb-2">
+        <button
+          onClick={() => setActiveSubTab('ledger')}
+          className={`px-4 py-2 text-xs font-bold font-mono uppercase tracking-wider border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+            activeSubTab === 'ledger'
+              ? 'border-sand-950 text-sand-950 font-bold'
+              : 'border-transparent text-sand-400 hover:text-sand-600'
+          }`}
+        >
+          <DollarSign size={14} /> Lançamentos & Relatórios
+        </button>
+        <button
+          onClick={() => setActiveSubTab('pix')}
+          className={`px-4 py-2 text-xs font-bold font-mono uppercase tracking-wider border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+            activeSubTab === 'pix'
+              ? 'border-sand-950 text-sand-950 font-bold'
+              : 'border-transparent text-sand-400 hover:text-sand-600'
+          }`}
+        >
+          <QrCode size={14} /> Configuração & Cobrança PIX
+        </button>
+      </div>
+
+      {activeSubTab === 'ledger' ? (
+        <>
+          {/* FINANCIAL INDICATORS DASHBOARD */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total Today */}
         <div className="bg-white p-5 rounded-2xl border border-sand-200 shadow-xs flex items-center gap-4">
@@ -615,6 +788,245 @@ export default function FinanceiroTab({ patients, appointments, onRefresh, siteC
           </div>
         </div>
       </div>
+    </>
+  ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-fade-in">
+          {/* CONFIGURATION COLUMN (Left - Col-5) */}
+          <div className="lg:col-span-5 bg-white p-6 rounded-2xl border border-sand-200 shadow-xs space-y-5">
+            <div>
+              <h3 className="text-sm font-serif font-bold text-sand-950 flex items-center gap-1.5">
+                <QrCode size={16} className="text-sand-700" /> Configuração PIX Profissional
+              </h3>
+              <p className="text-[10px] text-sand-500 font-mono mt-0.5 uppercase tracking-wider">
+                Defina sua chave de recebimento padrão
+              </p>
+            </div>
+
+            <form onSubmit={handleSavePixConfig} className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Tipo da Chave</label>
+                <select
+                  value={pixKeyType}
+                  onChange={(e) => setPixKeyType(e.target.value)}
+                  className="w-full px-3.5 py-2 text-xs rounded-xl border border-sand-200 bg-white focus:outline-none"
+                >
+                  <option value="CPF">CPF</option>
+                  <option value="CNPJ">CNPJ</option>
+                  <option value="Celular">Celular</option>
+                  <option value="E-mail">E-mail</option>
+                  <option value="Chave Aleatória">Chave Aleatória (EVP)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Chave PIX (Valor)</label>
+                <input
+                  type="text"
+                  required
+                  value={pixKey}
+                  onChange={(e) => setPixKey(e.target.value)}
+                  placeholder={pixKeyType === 'CPF' ? '000.000.000-00' : pixKeyType === 'Celular' ? '+5511999999999' : 'Chave'}
+                  className="w-full px-3.5 py-2 text-xs rounded-xl border border-sand-200 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Nome do Recebedor (Titular)</label>
+                <input
+                  type="text"
+                  required
+                  value={pixReceiverName}
+                  onChange={(e) => setPixReceiverName(e.target.value)}
+                  placeholder="Nome completo sem acentos"
+                  className="w-full px-3.5 py-2 text-xs rounded-xl border border-sand-200 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Cidade do Recebedor</label>
+                <input
+                  type="text"
+                  required
+                  value={pixReceiverCity}
+                  onChange={(e) => setPixReceiverCity(e.target.value)}
+                  placeholder="Ex: Fortaleza"
+                  className="w-full px-3.5 py-2 text-xs rounded-xl border border-sand-200 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Banco / Instituição (Opcional)</label>
+                <input
+                  type="text"
+                  value={pixBank}
+                  onChange={(e) => setPixBank(e.target.value)}
+                  placeholder="Ex: Itaú, Nubank, Banco do Brasil"
+                  className="w-full px-3.5 py-2 text-xs rounded-xl border border-sand-200 focus:outline-none"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-sand-100">
+                <button
+                  type="submit"
+                  disabled={pixLoading}
+                  className="w-full py-2.5 bg-sand-900 hover:bg-sand-950 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer shadow-sm disabled:bg-sand-400"
+                >
+                  <Check size={14} />
+                  <span>{pixLoading ? 'Salvando...' : 'Salvar Configuração'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* MANUAL BILLING / GENERATOR COLUMN (Right - Col-7) */}
+          <div className="lg:col-span-7 bg-white p-6 rounded-2xl border border-sand-200 shadow-xs space-y-5">
+            <div>
+              <h3 className="text-sm font-serif font-bold text-sand-950 flex items-center gap-1.5">
+                <Plus size={16} className="text-sand-700" /> Gerar Cobrança Manual PIX
+              </h3>
+              <p className="text-[10px] text-sand-500 font-mono mt-0.5 uppercase tracking-wider">
+                Gere e exporte um código PIX de consulta sob demanda
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+              {/* Form panel */}
+              <form onSubmit={handleGenerateManualBill} className="md:col-span-6 space-y-4">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Selecionar Paciente</label>
+                  <select
+                    value={billPatientId}
+                    onChange={(e) => {
+                      setBillPatientId(e.target.value);
+                      if (e.target.value) setBillCustomName('');
+                    }}
+                    className="w-full px-3.5 py-2 text-xs rounded-xl border border-sand-200 bg-white focus:outline-none"
+                  >
+                    <option value="">-- Selecionar Paciente --</option>
+                    {patients.map(p => (
+                      <option key={p.id} value={p.id}>{p.nome || p.name}</option>
+                    ))}
+                    <option value="avulso">Paciente Avulso / Não Cadastrado</option>
+                  </select>
+                </div>
+
+                {(!billPatientId || billPatientId === 'avulso') && (
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Nome do Paciente</label>
+                    <input
+                      type="text"
+                      required
+                      value={billCustomName}
+                      onChange={(e) => setBillCustomName(e.target.value)}
+                      placeholder="Nome completo do paciente avulso"
+                      className="w-full px-3.5 py-2 text-xs rounded-xl border border-sand-200 focus:outline-none"
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Valor da Consulta (R$)</label>
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    value={billAmount}
+                    onChange={(e) => setBillAmount(Number(e.target.value))}
+                    placeholder="150"
+                    className="w-full px-3.5 py-2 text-xs rounded-xl border border-sand-200 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Descrição / Referência</label>
+                  <input
+                    type="text"
+                    value={billDescription}
+                    onChange={(e) => setBillDescription(e.target.value)}
+                    placeholder="Ex: Sessao Semanal Terça-feira"
+                    className="w-full px-3.5 py-2 text-xs rounded-xl border border-sand-200 focus:outline-none"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-2.5 bg-sage-600 hover:bg-sage-700 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                >
+                  <QrCode size={14} />
+                  <span>Gerar Cobrança PIX</span>
+                </button>
+              </form>
+
+              {/* QR Code and Code output */}
+              <div className="md:col-span-6 flex flex-col items-center justify-center border-l border-sand-100 pl-0 md:pl-6 pt-6 md:pt-0">
+                {generatedPixCode ? (
+                  <div className="w-full text-center space-y-4">
+                    <div className="inline-block p-3 bg-white border border-sand-200 rounded-2xl shadow-xs">
+                      <img
+                        src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(generatedPixCode)}`}
+                        alt="QR Code PIX"
+                        referrerPolicy="no-referrer"
+                        className="w-40 h-40"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-sand-500 font-mono">PIX Copia e Cola</p>
+                      <div className="flex gap-1.5 w-full">
+                        <input
+                          type="text"
+                          readOnly
+                          value={generatedPixCode}
+                          className="bg-sand-50 text-[9px] font-mono text-sand-600 px-3 py-2 border border-sand-200 rounded-xl flex-1 select-all focus:outline-none truncate"
+                        />
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(generatedPixCode);
+                            setCopiedManualPix(true);
+                            setTimeout(() => setCopiedManualPix(false), 2000);
+                          }}
+                          className={`p-2.5 rounded-xl border transition-all ${
+                            copiedManualPix
+                              ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                              : 'bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100'
+                          }`}
+                          title="Copiar Pix"
+                        >
+                          {copiedManualPix ? <Check size={14} /> : <Copy size={14} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => downloadQrCode(generatedPixCode, `pix_cobranca_${billAmount}.png`)}
+                        className="flex-1 py-2 bg-sand-100 hover:bg-sand-200 border border-sand-200 rounded-xl text-[10px] font-bold uppercase tracking-wider text-sand-800 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <Download size={12} />
+                        <span>Baixar QR Code</span>
+                      </button>
+                      <button
+                        onClick={() => setGeneratedPixCode('')}
+                        className="py-2 px-3 border border-sand-200 hover:bg-sand-50 rounded-xl text-[10px] font-bold uppercase text-sand-700 transition-colors cursor-pointer"
+                      >
+                        Limpar
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-12 text-sand-400 max-w-xs space-y-2">
+                    <QrCode size={40} className="mx-auto text-sand-300 stroke-1" />
+                    <h4 className="font-serif font-bold text-xs text-sand-800">Pronto para Gerar</h4>
+                    <p className="text-[10px] leading-relaxed">
+                      Preencha os dados ao lado e clique em "Gerar Cobrança PIX" para criar instantaneamente o QR Code de pagamento.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* HIDDEN TEMPLATES FOR PRINT (NATIVE BROWSER PDF) */}
       <div id="report-print-template" className="hidden">

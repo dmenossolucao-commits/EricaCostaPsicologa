@@ -328,6 +328,7 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
   // Open Create Form
   const startCreation = () => {
     setForm({ ...INITIAL_FORM, endereco: { ...INITIAL_ADDRESS } });
+    setSelectedPatient(null);
     setIsEditing(false);
     setIsFormOpen(true);
     setErrorMessage('');
@@ -388,6 +389,24 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
           <ShieldAlert className="text-rose-600 shrink-0" size={16} />
           <span>{errorMessage}</span>
         </motion.div>
+      )}
+
+      {/* Module Title & Always-Visible Action Header for Admins */}
+      {!isFormOpen && (
+        <div id="patient-management-header" className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white p-6 rounded-2xl border border-sand-200/60 shadow-sm">
+          <div>
+            <h1 className="text-lg font-serif font-bold text-sand-950">Pacientes & Prontuários</h1>
+            <p className="text-xs text-sand-500">Gerencie fichas clínicas, evoluções e prontuários completos dos pacientes.</p>
+          </div>
+          <button
+            onClick={startCreation}
+            className="px-4 py-2 bg-sand-900 hover:bg-sand-950 !text-white font-bold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer shadow-sm ml-auto sm:ml-0 transition-colors shrink-0"
+            style={{ color: '#ffffff', backgroundColor: '#352f27' }}
+          >
+            <PlusCircle size={14} className="!text-white" style={{ color: '#ffffff' }} />
+            <span className="!text-white" style={{ color: '#ffffff' }}>Novo Paciente</span>
+          </button>
+        </div>
       )}
 
       {/* Main Container Switching between List/Add-Form and Individual Page */}
@@ -1416,10 +1435,11 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
                 {/* Add Button */}
                 <button
                   onClick={startCreation}
-                  className="px-4 py-2 bg-sand-900 hover:bg-sand-950 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer shadow-sm ml-auto transition-colors"
+                  className="px-4 py-2 bg-sand-900 hover:bg-sand-950 !text-white font-bold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer shadow-sm ml-auto transition-colors"
+                  style={{ color: '#ffffff', backgroundColor: '#352f27' }}
                 >
-                  <PlusCircle size={14} />
-                  <span>Novo Paciente</span>
+                  <PlusCircle size={14} className="!text-white" style={{ color: '#ffffff' }} />
+                  <span className="!text-white" style={{ color: '#ffffff' }}>Novo Paciente</span>
                 </button>
 
               </div>

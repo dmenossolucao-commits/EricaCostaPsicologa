@@ -157,6 +157,25 @@
         "createdAt": { "type": "number" }
       },
       "required": ["id", "patientId", "patientName", "psychologistName", "amount", "date", "paymentMethod", "signatureVerified", "createdAt"]
+    },
+    "PixConfig": {
+      "title": "PixConfig",
+      "description": "Configuração da chave PIX profissional da psicóloga para recebimentos.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "keyType": { "type": "string" },
+        "key": { "type": "string" },
+        "cpf": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "randomKey": { "type": "string" },
+        "receiverName": { "type": "string" },
+        "receiverCity": { "type": "string" },
+        "bank": { "type": "string" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "keyType", "key", "receiverName", "receiverCity"]
     }
   },
   "firestore": {
@@ -195,6 +214,10 @@
     "/receipts/{documentId}": {
       "schema": "Receipt",
       "description": "Recibos eletrônicos emitidos aos pacientes."
+    },
+    "/pix_config/{documentId}": {
+      "schema": "PixConfig",
+      "description": "Armazena a configuração das chaves PIX de recebimento."
     }
   }
 }

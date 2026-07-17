@@ -22,7 +22,9 @@ import firebaseConfig from "./firebase-applet-config.json";
 
 // Initialize Firebase Client App and Firestore
 const clientApp = initializeClientApp(firebaseConfig);
-const clientDb = getClientFirestore(clientApp, firebaseConfig.firestoreDatabaseId);
+const clientDb = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
+  ? getClientFirestore(clientApp, firebaseConfig.firestoreDatabaseId)
+  : getClientFirestore(clientApp);
 const clientAuth = getClientAuth(clientApp);
 
 // Authentication helper for the server
@@ -133,7 +135,94 @@ app.use(express.json());
 
 // API routes go here FIRST
 
+// 0. Proxy endpoint to fetch external PDFs without CORS issues
+app.get("/api/proxy-pdf", async (req, res) => {
+  const targetUrl = req.query.url as string;
+  if (!targetUrl) {
+    return res.status(400).send("URL is required");
+  }
+  try {
+    const response = await fetch(targetUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch PDF: ${response.statusText}`);
+    }
+    const contentType = response.headers.get("content-type") || "application/pdf";
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    
+    const buffer = Buffer.from(await response.arrayBuffer());
+    res.send(buffer);
+  } catch (err: any) {
+    console.error("Error proxying PDF:", err);
+    res.status(500).send(`Error fetching PDF: ${err.message}`);
+  }
+});
+
 // 1. Book an appointment
+function calculateCRC16Server(data: string): string {
+  let crc = 0xFFFF;
+  for (let i = 0; i < data.length; i++) {
+    const byte = data.charCodeAt(i);
+    crc ^= (byte << 8);
+    for (let j = 0; j < 8; j++) {
+      if ((crc & 0x8000) !== 0) {
+        crc = (crc << 1) ^ 0x1021;
+      } else {
+        crc = (crc << 1);
+      }
+      crc &= 0xFFFF;
+    }
+  }
+  let hex = crc.toString(16).toUpperCase();
+  while (hex.length < 4) {
+    hex = '0' + hex;
+  }
+  return hex;
+}
+
+function formatEMVFieldServer(id: string, value: string): string {
+  const len = value.length.toString().padStart(2, '0');
+  return `${id}${len}${value}`;
+}
+
+function cleanStringServer(str: string): string {
+  return str
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9\s*\-\.\@]/g, '')
+    .toUpperCase();
+}
+
+function generatePixCodeServer(data: { key: string; name: string; city: string; amount?: number; description?: string; transactionId?: string; }): string {
+  let payload = formatEMVFieldServer('00', '01');
+  const gui = formatEMVFieldServer('00', 'br.gov.bcb.pix');
+  const cleanKey = data.key.trim().replace(/\s+/g, '');
+  const key = formatEMVFieldServer('01', cleanKey);
+  let merchantInfoValue = `${gui}${key}`;
+  if (data.description) {
+    const cleanDesc = cleanStringServer(data.description).substring(0, 40);
+    merchantInfoValue += formatEMVFieldServer('02', cleanDesc);
+  }
+  payload += formatEMVFieldServer('26', merchantInfoValue);
+  payload += formatEMVFieldServer('52', '0000');
+  payload += formatEMVFieldServer('53', '986');
+  if (data.amount && data.amount > 0) {
+    payload += formatEMVFieldServer('54', data.amount.toFixed(2));
+  }
+  payload += formatEMVFieldServer('58', 'BR');
+  const cleanName = cleanStringServer(data.name).substring(0, 25);
+  payload += formatEMVFieldServer('59', cleanName);
+  const cleanCity = cleanStringServer(data.city).substring(0, 15);
+  payload += formatEMVFieldServer('60', cleanCity);
+  const rawTxId = data.transactionId || 'CON1';
+  const txId = cleanStringServer(rawTxId).replace(/[^A-Z0-9]/g, '').substring(0, 25) || 'CON1';
+  const additionalDataValue = formatEMVFieldServer('05', txId);
+  payload += formatEMVFieldServer('62', additionalDataValue);
+  payload += '6304';
+  const checksum = calculateCRC16Server(payload);
+  return `${payload}${checksum}`;
+}
+
 app.post("/api/appointments/book", async (req, res) => {
   try {
     const { serviceId, serviceTitle, patientName, patientEmail, patientPhone, date, timeSlot, amount, paymentMethod } = req.body;
@@ -257,13 +346,39 @@ app.post("/api/appointments/book", async (req, res) => {
       }
     }
 
-    // If still fallback simulator or created empty, generate dynamic simulator credentials
+    // If still fallback simulator or created empty, generate dynamic credentials using PixConfig
     if (!paymentData.qrCode && paymentMethod === "pix") {
+      let pixKey = "ericacostapsi@gmail.com";
+      let pixName = "Erica Costa";
+      let pixCity = "Fortaleza";
+      
+      try {
+        const pixConfigDoc = await db.collection("pix_config").doc("default").get();
+        if (pixConfigDoc.exists) {
+          const pData = pixConfigDoc.data();
+          if (pData && pData.key) {
+            pixKey = pData.key;
+            pixName = pData.receiverName || pixName;
+            pixCity = pData.receiverCity || pixCity;
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to fetch custom Pix configuration, using default:", err);
+      }
+
+      const generatedPix = generatePixCodeServer({
+        key: pixKey,
+        name: pixName,
+        city: pixCity,
+        amount: Number(amount),
+        description: `Consulta Erica Costa - ${serviceTitle}`,
+        transactionId: appointmentId.replace(/[^A-Z0-9]/g, "").substring(0, 25)
+      });
+
       paymentData = {
         type: "simulator",
-        qrCode: `00020101021226930014br.gov.bcb.pix2571pix.ericacostapsi.com/qr/booking/${appointmentId}5204000053039865405${Number(amount).toFixed(2)}5802BR5911Erica Costa6009Fortaleza62070503***6304${Math.random().toString(16).substring(2, 6).toUpperCase()}`,
-        // Clean elegant procedural mock QR Base64 or a styled design
-        qrCodeBase64: "" // Frontend can render with a QR library or nice styled placeholder SVG
+        qrCode: generatedPix,
+        qrCodeBase64: ""
       };
     } else if (!paymentData.initPoint && paymentMethod === "credit_card") {
       paymentData = {

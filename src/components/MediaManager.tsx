@@ -125,9 +125,9 @@ export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaM
       // Determine folder path in Storage
       const folder = key === 'admin' ? 'admins' : (key === 'blog_assets' ? 'blog' : 'site');
       
-      const url = await contentService.uploadImage(file, folder, (progress) => {
+      const url = await contentService.uploadImage(file, folder, (progress, status) => {
         setUploadProgress(prev => ({ ...prev, [key]: progress }));
-        setUploadStatus(prev => ({ ...prev, [key]: `Enviando arquivo: ${progress}%` }));
+        setUploadStatus(prev => ({ ...prev, [key]: status || `Enviando arquivo: ${progress}%` }));
       });
 
       // Update database accordingly

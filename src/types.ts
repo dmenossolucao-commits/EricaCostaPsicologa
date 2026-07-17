@@ -228,4 +228,18 @@ export interface TrashItem {
   data: any;
 }
 
+export interface PixConfig {
+  id: string;
+  keyType: string;
+  key: string;
+  cpf?: string;
+  phone?: string;
+  email?: string;
+  randomKey?: string;
+  receiverName: string;
+  receiverCity: string;
+  bank?: string;
+  updatedAt: number;
+}
+
 

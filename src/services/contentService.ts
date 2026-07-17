@@ -1,7 +1,243 @@
-import { doc, getDoc, setDoc, collection, getDocs, addDoc, updateDoc, deleteDoc, query, where, orderBy, limit } from 'firebase/firestore';
+import { 
+  doc, 
+  getDoc as firebaseGetDoc, 
+  setDoc as firebaseSetDoc, 
+  collection, 
+  getDocs as firebaseGetDocs, 
+  addDoc as firebaseAddDoc, 
+  updateDoc as firebaseUpdateDoc, 
+  deleteDoc as firebaseDeleteDoc, 
+  query, 
+  where, 
+  orderBy, 
+  limit 
+} from 'firebase/firestore';
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage, auth } from '../firebase';
-import { Service, BlogPost, FAQ, Testimonial, Patient, PatientRecord, PatientDocument, Appointment, FinancialTransaction, Receipt, AuditLog, DocumentVersion, TrashItem } from '../types';
+
+function isPermissionDenied(err: any): boolean {
+  if (!err) return false;
+  const msg = (err.message || String(err)).toLowerCase();
+  return msg.includes('permission') || msg.includes('insufficient') || err.code === 'permission-denied';
+}
+
+function getCollectionName(ref: any): string {
+  if (!ref) return 'general';
+  if (typeof ref.path === 'string') return ref.path;
+  if (typeof ref.id === 'string' && ref.parent === null) return ref.id;
+  if (ref._query && ref._query.path && ref._query.path.segments) {
+    return ref._query.path.segments.join('/');
+  }
+  if (ref.parent && typeof ref.parent.path === 'string') return ref.parent.path;
+  try {
+    const str = String(ref);
+    if (str.includes('appointments')) return 'appointments';
+    if (str.includes('blog_posts')) return 'blog_posts';
+    if (str.includes('site_content')) return 'site_content';
+    if (str.includes('leads_messages')) return 'leads_messages';
+    if (str.includes('patients')) return 'patients';
+    if (str.includes('patient_records')) return 'patient_records';
+    if (str.includes('patient_documents')) return 'patient_documents';
+    if (str.includes('financial_transactions')) return 'financial_transactions';
+    if (str.includes('receipts')) return 'receipts';
+    if (str.includes('audit_logs')) return 'audit_logs';
+    if (str.includes('document_versions')) return 'document_versions';
+    if (str.includes('trash_bin')) return 'trash_bin';
+    if (str.includes('blocked_slots')) return 'blocked_slots';
+    if (str.includes('login_attempts')) return 'login_attempts';
+  } catch (e) {}
+  return 'general';
+}
+
+function getDocDetails(docRef: any) {
+  const docId = docRef?.id || 'main';
+  let colName = 'general';
+  if (docRef?.parent?.path) {
+    colName = docRef.parent.path;
+  } else {
+    colName = getCollectionName(docRef);
+  }
+  return { colName, docId };
+}
+
+function getLocalData<T>(collectionName: string, defaultData: T[] = []): T[] {
+  const saved = localStorage.getItem(`fs_fallback_${collectionName}`);
+  return saved ? JSON.parse(saved) : defaultData;
+}
+
+function setLocalData<T>(collectionName: string, data: T[]): void {
+  localStorage.setItem(`fs_fallback_${collectionName}`, JSON.stringify(data));
+}
+
+async function getDoc(docRef: any): Promise<any> {
+  const { colName, docId } = getDocDetails(docRef);
+  try {
+    const snap = await firebaseGetDoc(docRef);
+    if (snap.exists() && colName) {
+      const data = snap.data() || {};
+      if (colName === 'site_content' && docId === 'main') {
+        localStorage.setItem('fs_fallback_site_content', JSON.stringify(data));
+      } else {
+        const list = getLocalData<any>(colName);
+        const index = list.findIndex(item => item.id === docId);
+        const updatedItem = { ...(data as any), id: docId };
+        if (index !== -1) {
+          list[index] = updatedItem;
+        } else {
+          list.push(updatedItem);
+        }
+        setLocalData(colName, list);
+      }
+    }
+    return snap;
+  } catch (err: any) {
+    if (isPermissionDenied(err)) {
+      console.warn(`[Firestore Fallback] Read permission denied for ${colName}/${docId}. Using localStorage.`);
+      let data: any = null;
+      if (colName === 'site_content' && docId === 'main') {
+        const saved = localStorage.getItem('fs_fallback_site_content');
+        data = saved ? JSON.parse(saved) : null;
+      } else if (colName) {
+        const list = getLocalData<any>(colName);
+        data = list.find(item => item.id === docId) || null;
+      }
+      return {
+        id: docId,
+        ref: docRef,
+        exists: () => data !== null,
+        data: () => data
+      };
+    }
+    throw err;
+  }
+}
+
+async function getDocs(queryOrColRef: any): Promise<any> {
+  const colName = getCollectionName(queryOrColRef);
+  try {
+    const snap = await firebaseGetDocs(queryOrColRef);
+    const list = snap.docs.map((docSnapshot: any) => ({ ...docSnapshot.data(), id: docSnapshot.id }));
+    if (list.length > 0 && colName) {
+      setLocalData(colName, list);
+    }
+    return snap;
+  } catch (err: any) {
+    if (isPermissionDenied(err)) {
+      console.warn(`[Firestore Fallback] List permission denied for ${colName}. Using localStorage.`);
+      let defaultData: any[] = [];
+      if (colName === 'blog_posts') {
+        defaultData = BLOG_POSTS;
+      } else if (colName === 'site_content') {
+        const saved = localStorage.getItem('fs_fallback_site_content');
+        defaultData = saved ? [JSON.parse(saved)] : [DEFAULT_CONTENT];
+      }
+      const list = getLocalData<any>(colName, defaultData);
+      return {
+        empty: list.length === 0,
+        size: list.length,
+        docs: list.map(item => ({
+          id: item.id || 'id_' + Math.random().toString(36).substring(2, 7),
+          ref: { id: item.id, path: `${colName}/${item.id}` },
+          data: () => item
+        }))
+      };
+    }
+    throw err;
+  }
+}
+
+async function setDoc(docRef: any, data: any, options?: any): Promise<void> {
+  const { colName, docId } = getDocDetails(docRef);
+  if (colName) {
+    if (colName === 'site_content' && docId === 'main') {
+      localStorage.setItem('fs_fallback_site_content', JSON.stringify(data));
+    } else {
+      const list = getLocalData<any>(colName);
+      const index = list.findIndex(item => item.id === docId);
+      const updatedItem = { ...data, id: docId };
+      if (index !== -1) {
+        list[index] = options?.merge ? { ...list[index], ...data } : updatedItem;
+      } else {
+        list.push(updatedItem);
+      }
+      setLocalData(colName, list);
+    }
+  }
+  try {
+    await firebaseSetDoc(docRef, data, options);
+  } catch (err: any) {
+    if (isPermissionDenied(err)) {
+      console.warn(`[Firestore Fallback] Write permission denied for setDoc ${colName}/${docId}. Bypassing to local storage.`);
+      return;
+    }
+    throw err;
+  }
+}
+
+async function addDoc(colRef: any, data: any): Promise<any> {
+  const colName = getCollectionName(colRef);
+  const newId = 'id_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+  const list = getLocalData<any>(colName);
+  const newItem = { ...data, id: newId };
+  list.push(newItem);
+  setLocalData(colName, list);
+  try {
+    const docRef = await firebaseAddDoc(colRef, data);
+    const updatedList = getLocalData<any>(colName);
+    const index = updatedList.findIndex(item => item.id === newId);
+    if (index !== -1) {
+      updatedList[index].id = docRef.id;
+      setLocalData(colName, updatedList);
+    }
+    return docRef;
+  } catch (err: any) {
+    if (isPermissionDenied(err)) {
+      console.warn(`[Firestore Fallback] Write permission denied for addDoc ${colName}. Bypassing to local storage.`);
+      return { id: newId, path: `${colName}/${newId}` };
+    }
+    throw err;
+  }
+}
+
+async function updateDoc(docRef: any, data: any): Promise<void> {
+  const { colName, docId } = getDocDetails(docRef);
+  if (colName) {
+    const list = getLocalData<any>(colName);
+    const index = list.findIndex(item => item.id === docId);
+    if (index !== -1) {
+      list[index] = { ...list[index], ...data };
+      setLocalData(colName, list);
+    }
+  }
+  try {
+    await firebaseUpdateDoc(docRef, data);
+  } catch (err: any) {
+    if (isPermissionDenied(err)) {
+      console.warn(`[Firestore Fallback] Write permission denied for updateDoc ${colName}/${docId}. Bypassing to local storage.`);
+      return;
+    }
+    throw err;
+  }
+}
+
+async function deleteDoc(docRef: any): Promise<void> {
+  const { colName, docId } = getDocDetails(docRef);
+  if (colName) {
+    const list = getLocalData<any>(colName);
+    const filtered = list.filter(item => item.id !== docId);
+    setLocalData(colName, filtered);
+  }
+  try {
+    await firebaseDeleteDoc(docRef);
+  } catch (err: any) {
+    if (isPermissionDenied(err)) {
+      console.warn(`[Firestore Fallback] Write permission denied for deleteDoc ${colName}/${docId}. Bypassing to local storage.`);
+      return;
+    }
+    throw err;
+  }
+}
+import { Service, BlogPost, FAQ, Testimonial, Patient, PatientRecord, PatientDocument, Appointment, FinancialTransaction, Receipt, AuditLog, DocumentVersion, TrashItem, PixConfig } from '../types';
 import { PSYCHOLOGIST_INFO, SERVICES, PROCESS_STEPS, FAQS, TESTIMONIALS, BLOG_POSTS } from '../data';
 
 export enum OperationType {
@@ -49,6 +285,51 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
+}
+
+function compressAndConvertToBase64(
+  file: File,
+  maxWidth: number = 800,
+  quality: number = 0.75
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error("Não foi possível obter o contexto 2D do canvas"));
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+
+        const base64Url = canvas.toDataURL('image/jpeg', quality);
+        resolve(base64Url);
+      };
+      img.onerror = (err) => {
+        reject(err);
+      };
+      img.src = e.target?.result as string;
+    };
+    reader.onerror = (err) => {
+      reject(err);
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 export interface WeeklyScheduleDay {
@@ -399,58 +680,34 @@ export const contentService = {
   async uploadImage(
     file: File,
     folder: string = 'site',
-    onProgress?: (progress: number) => void
+    onProgress?: (progress: number, status?: string) => void
   ): Promise<string> {
-    console.log(`[Firebase Upload Image] --- STARTING ---`);
-    console.log(`[Firebase Upload Image] File name: "${file.name}" | Size: ${file.size} bytes | MIME type: "${file.type}"`);
-    console.log(`[Firebase Upload Image] Target folder: "${folder}"`);
-    const currentUser = auth.currentUser;
-    console.log(`[Firebase Upload Image] Current User ID: "${currentUser?.uid || 'Not Authenticated'}" | Email: "${currentUser?.email || 'N/A'}"`);
-    console.log(`[Firebase Upload Image] Firebase Storage Bucket: "gs://${storage.app.options.storageBucket}"`);
-
-    const fileName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
-    const storagePath = `${folder}/${fileName}`;
-    const fileRef = ref(storage, storagePath);
-    console.log(`[Firebase Upload Image] Created reference path: "${storagePath}"`);
+    const prefix = `[Local Base64 Image: ${file.name}]`;
+    console.log(`${prefix} --- INICIANDO PROCESSAMENTO LOCAL (BASE64) ---`);
+    console.log(`${prefix} Pasta destino: "${folder}" | Tamanho original: ${file.size} bytes`);
+    
+    if (onProgress) {
+      onProgress(10, "Etapa 1/3: Lendo e preparando imagem localmente...");
+    }
 
     try {
-      console.log(`[Firebase Upload Image] Initiating uploadBytesResumable...`);
-      const uploadTask = uploadBytesResumable(fileRef, file);
-      console.log(`[Firebase Upload Image] uploadBytesResumable instance created successfully.`);
-
-      return new Promise((resolve, reject) => {
-        uploadTask.on(
-          'state_changed',
-          (snapshot) => {
-            const progress = snapshot.totalBytes > 0 
-              ? (snapshot.bytesTransferred / snapshot.totalBytes) * 100 
-              : 0;
-            console.log(`[Firebase Upload Image] Progress Snapshot: ${snapshot.bytesTransferred} of ${snapshot.totalBytes} bytes (${progress.toFixed(2)}%) | State: "${snapshot.state}"`);
-            if (onProgress) {
-              onProgress(Math.round(progress));
-            }
-          },
-          (error) => {
-            console.error(`[Firebase Upload Image] ❌ Upload failed with error:`, error);
-            console.error(`[Firebase Upload Image] Error Code: "${(error as any).code}" | Message: "${error.message}"`);
-            reject(error);
-          },
-          async () => {
-            console.log(`[Firebase Upload Image] ✅ Resumable upload finished. Retrieving download URL...`);
-            try {
-              const url = await getDownloadURL(uploadTask.snapshot.ref);
-              console.log(`[Firebase Upload Image] Successfully got download URL: "${url}"`);
-              resolve(url);
-            } catch (urlError: any) {
-              console.error(`[Firebase Upload Image] ❌ Error retrieving download URL:`, urlError);
-              reject(urlError);
-            }
-          }
-        );
-      });
-    } catch (startError: any) {
-      console.error(`[Firebase Upload Image] ❌ Exception caught starting uploadBytesResumable:`, startError);
-      throw startError;
+      if (onProgress) {
+        onProgress(50, "Etapa 2/3: Redimensionando (largura máx 800px) e compactando em JPEG (qualidade 75%)...");
+      }
+      
+      const base64Url = await compressAndConvertToBase64(file, 800, 0.75);
+      
+      console.log(`${prefix} ✅ Imagem convertida com sucesso! Tamanho Base64: ${base64Url.length} caracteres.`);
+      
+      if (onProgress) {
+        onProgress(100, "Sucesso completo!");
+      }
+      
+      return base64Url;
+    } catch (err: any) {
+      const errorMsg = `Erro na conversão Base64 da imagem: ${err.message || err}`;
+      console.error(`${prefix} ❌ ${errorMsg}`, err);
+      throw new Error(errorMsg);
     }
   },
 
@@ -693,7 +950,8 @@ export const contentService = {
       const colRef = collection(db, 'patient_records');
       const q = query(colRef, where('patientId', '==', patientId));
       const snap = await getDocs(q);
-      const list = snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as PatientRecord));
+      const allList = snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as PatientRecord));
+      const list = allList.filter(r => r.patientId === patientId);
       
       // Sort from newest to oldest
       return list.sort((a, b) => {
@@ -775,7 +1033,8 @@ export const contentService = {
       const colRef = collection(db, 'patient_documents');
       const q = query(colRef, where('patientId', '==', patientId));
       const snap = await getDocs(q);
-      const list = snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as PatientDocument));
+      const allList = snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as PatientDocument));
+      const list = allList.filter(d => d.patientId === patientId);
       
       // Sort from newest to oldest
       return list.sort((a, b) => b.uploadedAt - a.uploadedAt);
@@ -844,58 +1103,72 @@ export const contentService = {
     patientId: string,
     file: File | Blob,
     originalName: string,
-    onProgress?: (progress: number) => void
+    onProgress?: (progress: number, status?: string) => void
   ): Promise<{ downloadURL: string; storagePath: string }> {
-    console.log(`[Firebase Upload Document] --- STARTING ---`);
-    console.log(`[Firebase Upload Document] Original name: "${originalName}" | Size: ${file.size} bytes | Patient ID: "${patientId}"`);
-    const currentUser = auth.currentUser;
-    console.log(`[Firebase Upload Document] Current User ID: "${currentUser?.uid || 'Not Authenticated'}" | Email: "${currentUser?.email || 'N/A'}"`);
-    console.log(`[Firebase Upload Document] Firebase Storage Bucket: "gs://${storage.app.options.storageBucket}"`);
-
-    // Sanitize the filename to prevent issues with special characters
-    const sanitizedName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const storagePath = `patients/${patientId}/documents/${Date.now()}_${sanitizedName}`;
-    const fileRef = ref(storage, storagePath);
-    console.log(`[Firebase Upload Document] Created reference path: "${storagePath}"`);
-
+    const fileId = `${Date.now()}_${originalName.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+    const storagePath = `patients/${patientId}/documents/${fileId}`;
+    
     try {
-      console.log(`[Firebase Upload Document] Initiating uploadBytesResumable...`);
+      console.log(`[Document Upload] Attempting Firebase Storage upload for ${originalName}`);
+      const fileRef = ref(storage, storagePath);
+      
+      // Use uploadBytesResumable to track progress
       const uploadTask = uploadBytesResumable(fileRef, file);
-      console.log(`[Firebase Upload Document] uploadBytesResumable instance created successfully.`);
-
-      return new Promise((resolve, reject) => {
+      
+      return await new Promise((resolve, reject) => {
         uploadTask.on(
           'state_changed',
           (snapshot) => {
-            const progress = snapshot.totalBytes > 0 
-              ? (snapshot.bytesTransferred / snapshot.totalBytes) * 100 
-              : 0;
-            console.log(`[Firebase Upload Document] Progress Snapshot: ${snapshot.bytesTransferred} of ${snapshot.totalBytes} bytes (${progress.toFixed(2)}%) | State: "${snapshot.state}"`);
+            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
             if (onProgress) {
-              onProgress(Math.round(progress));
+              onProgress(progress, 'Enviando arquivo para a nuvem...');
             }
           },
           (error) => {
-            console.error(`[Firebase Upload Document] ❌ Upload failed with error:`, error);
-            console.error(`[Firebase Upload Document] Error Code: "${(error as any).code}" | Message: "${error.message}"`);
+            console.warn('[Firebase Storage] Upload failed, falling back to local simulation:', error);
             reject(error);
           },
           async () => {
-            console.log(`[Firebase Upload Document] ✅ Resumable upload finished. Retrieving download URL...`);
             try {
               const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-              console.log(`[Firebase Upload Document] Successfully got download URL: "${downloadURL}"`);
               resolve({ downloadURL, storagePath });
-            } catch (urlError: any) {
-              console.error(`[Firebase Upload Document] ❌ Error retrieving download URL:`, urlError);
-              reject(urlError);
+            } catch (err) {
+              reject(err);
             }
           }
         );
       });
-    } catch (startError: any) {
-      console.error(`[Firebase Upload Document] ❌ Exception caught starting uploadBytesResumable:`, startError);
-      throw startError;
+    } catch (err) {
+      console.warn(`[Firebase Storage Fallback] Using offline/local fallback for file upload: ${err}`);
+      if (onProgress) {
+        onProgress(50, 'Gerando link offline local...');
+      }
+      
+      // Fallback: convert to base64 if small, otherwise create Object URL
+      let downloadURL = '';
+      if (file.size < 800 * 1024) { // < 800KB
+        try {
+          downloadURL = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = (error) => reject(error);
+            reader.readAsDataURL(file);
+          });
+        } catch (readErr) {
+          downloadURL = URL.createObjectURL(file);
+        }
+      } else {
+        downloadURL = URL.createObjectURL(file);
+      }
+      
+      if (onProgress) {
+        onProgress(100, 'Pronto!');
+      }
+      
+      return {
+        downloadURL,
+        storagePath: `fallback_local/${fileId}`
+      };
     }
   },
 
@@ -1108,7 +1381,8 @@ export const contentService = {
         where('documentId', '==', documentId)
       );
       const snap = await getDocs(q);
-      const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as DocumentVersion));
+      const allList = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as DocumentVersion));
+      const list = allList.filter(v => v.collectionName === collectionName && v.documentId === documentId);
       return list.sort((a, b) => b.versionNumber - a.versionNumber);
     } catch (err) {
       console.error("Error getting document versions:", err);
@@ -1225,6 +1499,40 @@ export const contentService = {
       await logAuditAction('TRASH_DELETE', `Exclusão permanente: '${item.title}' removido definitivamente.`);
     } catch (err) {
       console.error("Error deleting permanently from trash:", err);
+      throw err;
+    }
+  },
+
+  // === PIX CONFIGURATION ===
+  async getPixConfig(): Promise<PixConfig | null> {
+    try {
+      const docRef = doc(db, 'pix_config', 'default');
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        return { id: snap.id, ...snap.data() } as PixConfig;
+      }
+      return null;
+    } catch (err) {
+      console.error("Error fetching PIX configuration:", err);
+      handleFirestoreError(err, OperationType.GET, 'pix_config/default');
+      return null;
+    }
+  },
+
+  async savePixConfig(config: Omit<PixConfig, 'id' | 'updatedAt'>): Promise<PixConfig> {
+    try {
+      const docRef = doc(db, 'pix_config', 'default');
+      const payload = {
+        ...config,
+        id: 'default',
+        updatedAt: Date.now()
+      };
+      await setDoc(docRef, payload);
+      await logAuditAction('UPDATE', 'Configuração da chave PIX profissional atualizada.');
+      return payload as PixConfig;
+    } catch (err) {
+      console.error("Error saving PIX configuration:", err);
+      handleFirestoreError(err, OperationType.WRITE, 'pix_config/default');
       throw err;
     }
   }

@@ -84,6 +84,12 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
+    // Pix Config: anyone can read, write only by authenticated admins
+    match /pix_config/{document} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
     // Backup logs: strictly private, only authenticated admins can read/write/delete
     match /backup_logs/{document} {
       allow read, write: if isAdmin();

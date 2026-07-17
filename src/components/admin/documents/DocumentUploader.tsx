@@ -28,6 +28,7 @@ export const DocumentUploader: React.FC<DocumentUploaderProps> = ({
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [statusText, setStatusText] = useState('ENVIANDO ARQUIVO...');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -88,8 +89,11 @@ export const DocumentUploader: React.FC<DocumentUploaderProps> = ({
         patient.id,
         file,
         file.name,
-        (uploadProgress) => {
+        (uploadProgress, status) => {
           setProgress(Math.round(uploadProgress));
+          if (status) {
+            setStatusText(status);
+          }
         }
       );
 
@@ -111,9 +115,13 @@ export const DocumentUploader: React.FC<DocumentUploaderProps> = ({
 
       setUploading(false);
       onUploadSuccess(docRecord);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error uploading document file:', err);
-      setError('Ocorreu um erro ao enviar este documento para o prontuário do paciente.');
+      if (err.message && err.message.includes('Firebase Storage')) {
+        setError(err.message);
+      } else {
+        setError(`Ocorreu um erro ao enviar este documento para o prontuário do paciente: ${err.message || err}`);
+      }
       setUploading(false);
     }
   };
@@ -128,7 +136,7 @@ export const DocumentUploader: React.FC<DocumentUploaderProps> = ({
         <button
           type="button"
           onClick={onCancel}
-          className="text-xs font-semibold text-sand-500 hover:text-sand-900 cursor-pointer font-mono"
+          className="text-xs font-bold text-softblue-700 hover:text-softblue-900 hover:underline cursor-pointer font-mono transition-all"
         >
           Cancelar
         </button>
@@ -201,7 +209,7 @@ export const DocumentUploader: React.FC<DocumentUploaderProps> = ({
           <div className="flex items-center justify-between font-mono text-[10px] text-sand-500 font-bold">
             <span className="flex items-center gap-1.5">
               <Loader2 size={12} className="animate-spin text-softblue-600" />
-              <span>ENVIANDO ARQUIVO...</span>
+              <span>{statusText.toUpperCase()}</span>
             </span>
             <span>{progress}%</span>
           </div>
@@ -263,7 +271,7 @@ export const DocumentUploader: React.FC<DocumentUploaderProps> = ({
           type="button"
           onClick={onCancel}
           disabled={uploading}
-          className="px-4 py-2 hover:bg-sand-50 border border-sand-200 rounded-xl text-xs font-semibold text-sand-700 cursor-pointer"
+          className="px-4 py-2 bg-sand-100 hover:bg-sand-200 border border-sand-300 rounded-xl text-xs font-bold text-sand-800 hover:text-sand-950 cursor-pointer transition-colors"
         >
           Voltar
         </button>

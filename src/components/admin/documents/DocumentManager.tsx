@@ -125,7 +125,8 @@ export const DocumentManager: React.FC<DocumentManagerProps> = ({ patient }) => 
       const isAuthorized = auth.currentUser && (
         auth.currentUser.email === 'ericacostapsicologa7@gmail.com' ||
         auth.currentUser.email === 'd-briciod2@hotmail.com' ||
-        auth.currentUser.email === 'admin@ericacostapsi.com.br'
+        auth.currentUser.email === 'admin@ericacostapsi.com.br' ||
+        auth.currentUser.email === 'dmenossolucao@gmail.com'
       );
 
       if (!isAuthorized) {

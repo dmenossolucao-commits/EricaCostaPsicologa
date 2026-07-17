@@ -99,10 +99,11 @@ export default function PacientesTab({
               setPatientForm({ name: '', email: '', phone: '', cpf: '', dateOfBirth: '', address: '', notes: '', history: '' });
               setIsPatientModalOpen(true);
             }}
-            className="p-1.5 bg-sage-50 text-sage-700 hover:bg-sage-100 border border-sage-200 rounded-lg flex items-center gap-1 text-xs font-bold cursor-pointer"
+            className="px-2.5 py-1.5 bg-sand-900 hover:bg-sand-950 !text-white rounded-xl flex items-center gap-1.5 text-xs font-bold cursor-pointer transition-colors shadow-sm"
+            style={{ color: '#ffffff', backgroundColor: '#352f27' }}
           >
-            <PlusCircle size={14} />
-            <span className="hidden sm:inline">Adicionar</span>
+            <PlusCircle size={14} className="!text-white" style={{ color: '#ffffff' }} />
+            <span className="!text-white" style={{ color: '#ffffff' }}>Novo Paciente</span>
           </button>
         </div>
 

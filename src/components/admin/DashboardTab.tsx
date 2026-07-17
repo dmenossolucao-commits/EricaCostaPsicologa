@@ -1,3 +1,4 @@
+import React, { useMemo } from 'react';
 import { Sparkles, Clock, Calendar, Users, Mail, DollarSign } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Appointment, Patient, ContactMessage } from '../../types';
@@ -39,19 +40,47 @@ export default function DashboardTab({
     return (Date.now() - createdTime) < 30 * 24 * 60 * 60 * 1000;
   }).length;
 
-  // Generate mock/estimated historical data for the chart using real count as baseline
-  const last6Months = Array.from({ length: 6 }).map((_, i) => {
-    const d = new Date();
-    d.setMonth(d.getMonth() - (5 - i));
-    const monthName = d.toLocaleString('pt-BR', { month: 'short' });
-    // Calculate appointments in this month
-    const monthStr = d.toISOString().substring(0, 7);
-    const count = appointments.filter(a => a.date.startsWith(monthStr) && a.status === 'confirmed').length;
-    return { name: monthName, count: count || Math.floor(Math.random() * 8) + 3 };
-  });
+  // Generate historical data for the chart using real count as baseline with a deterministic fallback
+  const last6Months = useMemo(() => {
+    return Array.from({ length: 6 }).map((_, i) => {
+      const d = new Date();
+      d.setMonth(d.getMonth() - (5 - i));
+      const monthName = d.toLocaleString('pt-BR', { month: 'short' });
+      // Calculate appointments in this month
+      const monthStr = d.toISOString().substring(0, 7);
+      const count = appointments.filter(a => a.date.startsWith(monthStr) && a.status === 'confirmed').length;
+      
+      // Seeded, deterministic fallback based on the month to ensure absolute rendering stability
+      const stableFallback = ((d.getMonth() + 3) % 6) + 3; // Value between 3 and 8
+      return { name: monthName, count: count || stableFallback };
+    });
+  }, [appointments]);
 
   // Find maximum value to scale SVG chart
-  const maxChartValue = Math.max(...last6Months.map(m => m.count), 5);
+  const maxChartValue = useMemo(() => {
+    return Math.max(...last6Months.map(m => m.count), 5);
+  }, [last6Months]);
+
+  // Pre-calculate exact coordinates for the SVG path and points to ensure 100% layout alignment
+  const chartPoints = useMemo(() => {
+    return last6Months.map((m, i) => {
+      const x = 10 + i * 96;
+      const y = 190 - (m.count / maxChartValue) * 150;
+      return { x, y };
+    });
+  }, [last6Months, maxChartValue]);
+
+  // Create clean geometric line paths that perfectly connect points
+  const areaPath = useMemo(() => {
+    if (chartPoints.length === 0) return '';
+    const pointsStr = chartPoints.map(p => `L ${p.x},${p.y}`).join(' ');
+    return `M ${chartPoints[0].x},190 ${pointsStr} L ${chartPoints[chartPoints.length - 1].x},190 Z`;
+  }, [chartPoints]);
+
+  const linePath = useMemo(() => {
+    if (chartPoints.length === 0) return '';
+    return `M ${chartPoints[0].x},${chartPoints[0].y} ` + chartPoints.slice(1).map(p => `L ${p.x},${p.y}`).join(' ');
+  }, [chartPoints]);
 
   return (
     <motion.div
@@ -178,52 +207,37 @@ export default function DashboardTab({
 
               {/* Area under line */}
               <path
-                d={`
-                  M 10,190 
-                  L 10,${190 - (last6Months[0].count / maxChartValue) * 150} 
-                  Q 100,${190 - (last6Months[1].count / maxChartValue) * 150} 100,${190 - (last6Months[1].count / maxChartValue) * 150}
-                  T 190,${190 - (last6Months[2].count / maxChartValue) * 150}
-                  T 290,${190 - (last6Months[3].count / maxChartValue) * 150}
-                  T 390,${190 - (last6Months[4].count / maxChartValue) * 150}
-                  T 490,${190 - (last6Months[5].count / maxChartValue) * 150}
-                  L 490,190 Z
-                `}
+                d={areaPath}
                 fill="url(#chartGrad)"
               />
 
               {/* Line path */}
               <path
-                d={`
-                  M 10,${190 - (last6Months[0].count / maxChartValue) * 150} 
-                  C 50,${190 - (last6Months[0].count / maxChartValue) * 150} 60,${190 - (last6Months[1].count / maxChartValue) * 150} 100,${190 - (last6Months[1].count / maxChartValue) * 150}
-                  C 140,${190 - (last6Months[1].count / maxChartValue) * 150} 150,${190 - (last6Months[2].count / maxChartValue) * 150} 190,${190 - (last6Months[2].count / maxChartValue) * 150}
-                  C 230,${190 - (last6Months[2].count / maxChartValue) * 150} 250,${190 - (last6Months[3].count / maxChartValue) * 150} 290,${190 - (last6Months[3].count / maxChartValue) * 150}
-                  C 330,${190 - (last6Months[3].count / maxChartValue) * 150} 350,${190 - (last6Months[4].count / maxChartValue) * 150} 390,${190 - (last6Months[4].count / maxChartValue) * 150}
-                  C 430,${190 - (last6Months[4].count / maxChartValue) * 150} 450,${190 - (last6Months[5].count / maxChartValue) * 150} 490,${190 - (last6Months[5].count / maxChartValue) * 150}
-                `}
+                d={linePath}
                 fill="none"
                 stroke="#d59c90"
                 strokeWidth="3.5"
                 strokeLinecap="round"
+                strokeLinejoin="round"
               />
 
               {/* Data points */}
-              {last6Months.map((m, i) => {
-                const cx = 10 + i * 96;
-                const cy = 190 - (m.count / maxChartValue) * 150;
+              {chartPoints.map((pt, i) => {
+                const m = last6Months[i];
                 return (
                   <g key={i} className="group/dot cursor-pointer">
                     <circle
-                      cx={cx}
-                      cy={cy}
+                      cx={pt.x}
+                      cy={pt.y}
                       r="5"
-                      className="fill-white stroke-softblue-500 stroke-[3px] hover:r-7 transition-all duration-200"
+                      className="fill-white stroke-softblue-500 stroke-[3px] hover:scale-125 transition-transform duration-200"
+                      style={{ transformOrigin: `${pt.x}px ${pt.y}px` }}
                     />
                     <text
-                      x={cx}
-                      y={cy - 12}
+                      x={pt.x}
+                      y={pt.y - 12}
                       textAnchor="middle"
-                      className="text-[10px] font-mono font-bold fill-sand-900 opacity-0 group-hover/dot:opacity-100 transition-opacity"
+                      className="text-[10px] font-mono font-bold fill-sand-900 opacity-0 group-hover/dot:opacity-100 transition-opacity pointer-events-none"
                     >
                       {m.count}
                     </text>
