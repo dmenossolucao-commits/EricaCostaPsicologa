@@ -145,7 +145,7 @@ export const TwoFactorVerificationScreen: React.FC<TwoFactorVerificationScreenPr
                 pattern="\d*"
                 inputMode="numeric"
                 required
-                ref={(el) => (inputRefs.current[idx] = el)}
+                ref={(el) => { if (el) inputRefs.current[idx] = el; }}
                 value={digit}
                 onChange={(e) => handleChange(idx, e.target.value)}
                 onKeyDown={(e) => handleKeyDown(idx, e)}

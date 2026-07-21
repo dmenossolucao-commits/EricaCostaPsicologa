@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, RefreshCw, RotateCw, Crop, Sun, Check, X, ShieldAlert, Image, FileText, Settings, Loader2 } from 'lucide-react';
+import { Camera, RefreshCw, RotateCw, Crop, Sun, Check, X, ShieldAlert, Image as ImageIcon, FileText, Settings, Loader2 } from 'lucide-react';
 import { Patient } from '../../../types';
 import { contentService } from '../../../services/contentService';
 import { jsPDF } from 'jspdf';
@@ -310,7 +310,7 @@ export const ScannerCapture: React.FC<ScannerCaptureProps> = ({
                     onClick={triggerFallbackSelect}
                     className="px-4 py-2 border border-sand-700 hover:bg-sand-800 text-sand-300 rounded-xl text-xs font-bold font-mono uppercase tracking-wider cursor-pointer flex items-center justify-center gap-2"
                   >
-                    <Image size={14} />
+                    <ImageIcon size={14} />
                     <span>Selecionar da Galeria</span>
                   </button>
                 </div>
@@ -389,7 +389,7 @@ export const ScannerCapture: React.FC<ScannerCaptureProps> = ({
               className="p-3 bg-sand-900 hover:bg-sand-800 text-sand-300 rounded-2xl flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider cursor-pointer font-mono"
               title="Carregar Imagem"
             >
-              <Image size={16} />
+              <ImageIcon size={16} />
             </button>
 
             <button

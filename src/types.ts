@@ -22,7 +22,7 @@ export interface Appointment {
   status: 'pending_payment' | 'confirmed' | 'cancelled' | 'confirmada' | 'pendente' | 'remarcada' | 'cancelada' | 'nao_compareceu';
   paymentId?: string;
   paymentPreferenceId?: string;
-  paymentType?: 'pix' | 'credit_card' | 'simulator' | 'PIX' | 'Cartão' | 'Dinheiro' | 'Transferência';
+  paymentType?: 'pix' | 'credit_card' | 'debit_card' | 'simulator' | 'PIX' | 'Cartão' | 'Dinheiro' | 'Transferência';
   amount: number;
   createdAt: number;
   qrCode?: string; // for Pix
@@ -147,6 +147,8 @@ export interface Patient {
   updatedAt?: number;
   status?: 'Ativo' | 'Inativo';
   photoUrl?: string;
+  ultimaConsulta?: string;
+  proximaConsulta?: string;
 }
 
 export interface PatientRecord {
@@ -199,12 +201,13 @@ export interface AuditLog {
   id: string;
   userId: string;
   email: string;
-  action: 'LOGIN' | 'LOGOUT' | 'UPLOAD' | 'DOWNLOAD' | 'DELETE' | 'UPDATE' | 'PRINT' | 'RESTORE' | 'BACKUP_CREATE' | 'BACKUP_RESTORE' | 'TRASH_RESTORE' | 'TRASH_DELETE' | 'BLOCKED_ATTEMPT' | 'NEW_DEVICE_ALERT';
+  action: 'LOGIN' | 'LOGOUT' | 'UPLOAD' | 'DOWNLOAD' | 'DELETE' | 'UPDATE' | 'PRINT' | 'RESTORE' | 'BACKUP_CREATE' | 'BACKUP_RESTORE' | 'TRASH_RESTORE' | 'TRASH_DELETE' | 'BLOCKED_ATTEMPT' | 'NEW_DEVICE_ALERT' | string;
   details: string;
   timestamp: number;
   ip: string;
   browser: string;
   os: string;
+  tenantId?: string;
 }
 
 export interface DocumentVersion {
@@ -221,10 +224,13 @@ export interface DocumentVersion {
 export interface TrashItem {
   id: string;
   originalId: string;
-  originalCollection: 'patients' | 'patient_records' | 'patient_documents' | 'blog_posts' | 'receipts';
+  originalCollection: string;
   title: string;
   deletedAt: number;
   deletedBy: string;
+  deleteReason?: string;
+  restoreUntil?: number;
+  tenantId?: string;
   data: any;
 }
 
@@ -240,6 +246,52 @@ export interface PixConfig {
   receiverCity: string;
   bank?: string;
   updatedAt: number;
+}
+
+export type SaaSPlanId = 'Starter' | 'Pro' | 'Premium' | 'Clinic' | 'Enterprise';
+
+export interface SaaSPlanLimits {
+  id: SaaSPlanId;
+  name: string;
+  price: number;
+  maxPatients: number;
+  maxUsers: number;
+  storageGb: number;
+  maxSchedules: number;
+  maxPsychologists: number;
+  hasIaClinical: boolean;
+  hasWhatsAppIntegration: boolean;
+  hasNfse: boolean;
+  hasDesktopVersion: boolean;
+  hasMobileApps: boolean;
+  hasDesigner: boolean;
+  hasCms: boolean;
+  hasBackup: boolean;
+  hasApi: boolean;
+  hasIntegrations: boolean;
+  features: string[];
+}
+
+export interface License {
+  id: string;
+  code: string;
+  activatedAt: number;
+  expiresAt: number;
+  plan: SaaSPlanId;
+  maxUsers: number;
+  maxPatients: number;
+  features: string[]; // e.g. ["agenda", "financeiro", "documentos", "designer", "api"]
+  status: 'Ativa' | 'Suspensa' | 'Expirada';
+  tenantId: string;
+}
+
+export interface Tenant {
+  id: string; // matches tenantId
+  name: string;
+  subdomain?: string;
+  createdAt: number;
+  ownerEmail: string;
+  status: 'Ativo' | 'Bloqueado';
 }
 
 

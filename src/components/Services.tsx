@@ -6,8 +6,8 @@ import { Service } from '../types';
 
 export default function Services() {
   const { siteContent } = useSiteContent();
-  const { services } = siteContent;
-  const { whatsappUrl } = siteContent.psychologist_info;
+  const services = siteContent?.services || [];
+  const { whatsappUrl = '#' } = siteContent?.psychologist_info || {};
   const [selectedService, setSelectedService] = useState<Service | null>(null);
 
   // Map icon strings to Lucide components

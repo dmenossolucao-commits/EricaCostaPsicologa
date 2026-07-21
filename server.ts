@@ -18,7 +18,19 @@ import {
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword 
 } from "firebase/auth";
+import admin from "firebase-admin";
+import { getAuth } from "firebase-admin/auth";
 import firebaseConfig from "./firebase-applet-config.json";
+
+// Initialize Firebase Admin SDK
+try {
+  admin.initializeApp({
+    projectId: firebaseConfig.projectId
+  });
+  console.log("Firebase Admin successfully initialized.");
+} catch (err: any) {
+  console.error("Firebase Admin initialization error:", err.message);
+}
 
 // Initialize Firebase Client App and Firestore
 const clientApp = initializeClientApp(firebaseConfig);
@@ -46,6 +58,86 @@ async function ensureAuthenticated() {
     } catch (createErr: any) {
       console.error("Failed to authenticate server:", createErr.message);
     }
+  }
+}
+
+async function ensureMasterUser() {
+  const masterEmail = "dmenossolucao@gmail.com";
+  const masterPassword = "F@b486875";
+  const logs: string[] = [];
+
+  const log = (msg: string) => {
+    console.log(msg);
+    logs.push(msg);
+  };
+
+  const logError = (msg: string) => {
+    console.error(msg);
+    logs.push("ERROR: " + msg);
+  };
+
+  try {
+    log(`[Master Provisioning] Checking if master user ${masterEmail} exists in Firebase Auth...`);
+    const firebaseAdminAuth = getAuth();
+    let userRecord;
+    try {
+      userRecord = await firebaseAdminAuth.getUserByEmail(masterEmail);
+      log(`[Master Provisioning] Master user found with UID: ${userRecord.uid}. Ensuring active password and status...`);
+      await firebaseAdminAuth.updateUser(userRecord.uid, {
+        password: masterPassword,
+        emailVerified: true,
+        disabled: false
+      });
+      log("[Master Provisioning] Master user password and status successfully updated.");
+    } catch (authErr: any) {
+      if (authErr.code === "auth/user-not-found" || authErr.code === "user-not-found") {
+        log("[Master Provisioning] Master user not found. Creating a new master user...");
+        userRecord = await firebaseAdminAuth.createUser({
+          email: masterEmail,
+          password: masterPassword,
+          emailVerified: true,
+          disabled: false
+        });
+        log(`[Master Provisioning] Master user created successfully with UID: ${userRecord.uid}`);
+      } else {
+        throw authErr;
+      }
+    }
+
+    const masterDocData = {
+      email: masterEmail,
+      role: "master",
+      status: "active",
+      tenantId: "mentecare_platform",
+      plan: "enterprise",
+      isMaster: true
+    };
+
+    try {
+      log("[Master Provisioning] Ensuring Firestore admin documents for Master...");
+      await db.collection("admins").doc(userRecord.uid).set(masterDocData);
+      await db.collection("admins").doc(masterEmail).set(masterDocData);
+      log("[Master Provisioning] Master user documents successfully updated in Firestore.");
+    } catch (fsErr: any) {
+      logError(`[Master Provisioning] Failed to write master user to Firestore: ${fsErr.message}`);
+    }
+    return { success: true, logs };
+  } catch (err: any) {
+    logError(`[Master Provisioning] Critical error in ensureMasterUser script: ${err.message}`);
+    return { success: false, logs, error: err.message };
+  }
+}
+
+async function safeJson(response: any): Promise<any> {
+  const text = await response.text();
+  if (!text || text.trim() === "") {
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    console.error("Failed to parse JSON on server:", err, "Text was:", text);
+    return null;
   }
 }
 
@@ -134,6 +226,16 @@ app.use((req, res, next) => {
 app.use(express.json());
 
 // API routes go here FIRST
+
+// 0. Provision Master User
+app.get("/api/provision-master", async (req, res) => {
+  try {
+    const result = await ensureMasterUser();
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // 0. Proxy endpoint to fetch external PDFs without CORS issues
 app.get("/api/proxy-pdf", async (req, res) => {
@@ -227,7 +329,7 @@ app.post("/api/appointments/book", async (req, res) => {
   try {
     const { serviceId, serviceTitle, patientName, patientEmail, patientPhone, date, timeSlot, amount, paymentMethod } = req.body;
 
-    if (!serviceId || !patientName || !patientEmail || !patientPhone || !date || !timeSlot || !amount) {
+    if (!serviceId || !patientName || !patientPhone || !date || !timeSlot || !amount) {
       return res.status(400).json({ error: "Parâmetros obrigatórios ausentes." });
     }
 
@@ -282,8 +384,8 @@ app.post("/api/appointments/book", async (req, res) => {
           })
         });
 
-        const mpResult = await mpResponse.json();
-        if (mpResponse.ok && mpResult.point_of_interaction?.transaction_data) {
+        const mpResult = await safeJson(mpResponse);
+        if (mpResponse.ok && mpResult && mpResult.point_of_interaction?.transaction_data) {
           const tData = mpResult.point_of_interaction.transaction_data;
           paymentData = {
             type: "pix",
@@ -297,7 +399,7 @@ app.post("/api/appointments/book", async (req, res) => {
       } catch (err) {
         console.error("Error creating real Mercado Pago Pix:", err);
       }
-    } else if (isRealMP && paymentMethod === "credit_card") {
+    } else if (isRealMP && (paymentMethod === "credit_card" || paymentMethod === "debit_card")) {
       try {
         // Create checkout preference on Mercado Pago
         const mpResponse = await fetch("https://api.mercadopago.com/v1/checkout/preferences", {
@@ -331,10 +433,10 @@ app.post("/api/appointments/book", async (req, res) => {
           })
         });
 
-        const mpResult = await mpResponse.json();
-        if (mpResponse.ok && mpResult.id) {
+        const mpResult = await safeJson(mpResponse);
+        if (mpResponse.ok && mpResult && mpResult.id) {
           paymentData = {
-            type: "credit_card",
+            type: paymentMethod,
             preferenceId: mpResult.id,
             initPoint: mpResult.init_point
           };
@@ -380,7 +482,7 @@ app.post("/api/appointments/book", async (req, res) => {
         qrCode: generatedPix,
         qrCodeBase64: ""
       };
-    } else if (!paymentData.initPoint && paymentMethod === "credit_card") {
+    } else if (!paymentData.initPoint && (paymentMethod === "credit_card" || paymentMethod === "debit_card")) {
       paymentData = {
         type: "simulator",
         initPoint: `${process.env.APP_URL || "http://localhost:3000"}/?simulate_checkout=true&appointment_id=${appointmentId}&amount=${amount}`
@@ -561,8 +663,8 @@ app.post("/api/webhook/mercadopago", async (req, res) => {
       });
       
       if (mpResponse.ok) {
-        const paymentInfo = await mpResponse.json();
-        if (paymentInfo.status === "approved") {
+        const paymentInfo = await safeJson(mpResponse);
+        if (paymentInfo && paymentInfo.status === "approved") {
           // Identify appointment by reference or description metadata or search
           const snap = await db.collection("appointments").get();
           const appt = snap.docs.find(d => {
@@ -591,6 +693,9 @@ app.post("/api/webhook/mercadopago", async (req, res) => {
 
 // Vite middleware setup and server listen bootstrap
 async function bootstrap() {
+  // Guarantee the master user is correctly provisioned/updated in Auth and Firestore on startup
+  await ensureMasterUser();
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },

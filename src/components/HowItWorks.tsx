@@ -4,7 +4,7 @@ import { ArrowDown, HelpCircle } from 'lucide-react';
 
 export default function HowItWorks() {
   const { siteContent } = useSiteContent();
-  const { process_steps } = siteContent;
+  const process_steps = siteContent?.process_steps || [];
   return (
     <section id="como-funciona" className="py-20 bg-white">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">

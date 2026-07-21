@@ -3,8 +3,8 @@ import {
   Mail, Phone, Calendar, Trash2, Check, X, ShieldAlert, Inbox, MessageSquarePlus, 
   RefreshCw, Plus, Ban, DollarSign, Users, ExternalLink, CheckCircle2, AlertCircle, 
   Clock, Image as ImageIcon, Settings, Upload, FileText, Sparkles, Save, BookOpen, 
-  LogOut, ChevronRight, ChevronLeft, User, Search, MapPin, Eye, Edit3, Lock, PlusCircle, CreditCard,
-  Menu, ShieldCheck
+  LogOut, ChevronRight, ChevronLeft, User, Search, MapPin, Eye, Edit3, Lock, PlusCircle, CreditCard, Layout,
+  Menu, ShieldCheck, Paintbrush, Layers
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useSiteContent } from '../context/SiteContext';
@@ -19,7 +19,8 @@ import {
   updateEmail,
   updateProfile
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc, collection, getDocs, deleteDoc } from 'firebase/firestore';
+import { collection } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, getDocs, deleteDoc } from '../services/contentService';
 import { auth, db } from '../firebase';
 import MediaManager from './MediaManager';
 import { PatientManager } from './admin/PatientManager';
@@ -28,7 +29,24 @@ import FinanceiroTab from './admin/FinanceiroTab';
 import BackupTab from './admin/BackupTab';
 import { SecurityPanel } from './admin/SecurityPanel';
 import { TwoFactorVerificationScreen } from './admin/TwoFactorVerificationScreen';
-import { logAuditAction, detectClientInfo } from '../services/contentService';
+import { logAuditAction, detectClientInfo, getTenantId } from '../services/contentService';
+import CMSTab from './admin/CMSTab';
+import DesignerTab from './admin/DesignerTab';
+import MultiempresaTab from './admin/MultiempresaTab';
+import MasterPanel from './admin/MasterPanel';
+
+async function safeJson(response: Response): Promise<any> {
+  const text = await response.text();
+  if (!text || text.trim() === '') {
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    console.error('Failed to parse JSON:', err, 'Response text was:', text);
+    return null;
+  }
+}
 
 const ADMIN_EMAILS = [
   'd-briciod2@hotmail.com',
@@ -37,28 +55,50 @@ const ADMIN_EMAILS = [
   'dmenossolucao@gmail.com'
 ];
 
+const MASTER_EMAILS = [
+  'dmenossolucao@gmail.com',
+  'd-briciod2@hotmail.com'
+];
+
 interface AdminAppProps {
   navigate: (to: string) => void;
   currentPath: string;
   key?: string;
 }
 
+const safeConfirm = (message: string): boolean => {
+  try {
+    return window.confirm(message);
+  } catch (e) {
+    console.warn("window.confirm was blocked by iframe sandboxing:", e);
+    return true; // Bypass confirmation in iframe previews where modals are sandboxed
+  }
+};
+
+const safeAlert = (message: string) => {
+  try {
+    window.alert(message);
+  } catch (e) {
+    console.warn("window.alert was blocked by iframe sandboxing:", e);
+  }
+};
+
 export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
-  const { siteContent, blogPosts, user, loading: contextLoading, refreshContent, refreshBlog, logout, updateSiteContent, updateBlogPosts } = useSiteContent();
+  const { siteContent, blogPosts, user, loading: contextLoading, refreshContent, refreshBlog, logout, updateSiteContent, updateBlogPosts, permissions } = useSiteContent();
 
   const getActiveTabFromPath = (path: string) => {
     if (path.startsWith('/admin/')) {
       const subPath = path.substring(7); // '/admin/' has 7 characters
-      const validTabs = ['dashboard', 'perfil', 'fotos', 'agenda', 'pacientes', 'mensagens', 'blog', 'pagamentos', 'configuracoes', 'minhaconta', 'seguranca'];
+      const validTabs = ['dashboard', 'perfil', 'fotos', 'agenda', 'pacientes', 'mensagens', 'blog', 'pagamentos', 'configuracoes', 'minhaconta', 'seguranca', 'cms', 'designer', 'multiempresa', 'prontuarios', 'portal_paciente'];
       if (validTabs.includes(subPath)) {
-        return subPath as 'dashboard' | 'perfil' | 'fotos' | 'agenda' | 'pacientes' | 'mensagens' | 'blog' | 'pagamentos' | 'configuracoes' | 'minhaconta' | 'seguranca';
+        return subPath as 'dashboard' | 'perfil' | 'fotos' | 'agenda' | 'pacientes' | 'mensagens' | 'blog' | 'pagamentos' | 'configuracoes' | 'minhaconta' | 'seguranca' | 'cms' | 'designer' | 'multiempresa' | 'prontuarios' | 'portal_paciente';
       }
     }
     return 'dashboard';
   };
 
   const [activeTab, setActiveTab] = useState<
-    'dashboard' | 'perfil' | 'fotos' | 'agenda' | 'pacientes' | 'mensagens' | 'blog' | 'pagamentos' | 'configuracoes' | 'minhaconta' | 'seguranca'
+    'dashboard' | 'perfil' | 'fotos' | 'agenda' | 'pacientes' | 'mensagens' | 'blog' | 'pagamentos' | 'configuracoes' | 'minhaconta' | 'seguranca' | 'cms' | 'designer' | 'multiempresa' | 'prontuarios' | 'portal_paciente'
   >(() => getActiveTabFromPath(currentPath));
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -74,7 +114,7 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
       const path = currentPath;
       if (path.startsWith('/admin/')) {
         const subPath = path.substring(7); // '/admin/' has 7 characters
-        const validTabs = ['dashboard', 'perfil', 'fotos', 'agenda', 'pacientes', 'mensagens', 'blog', 'pagamentos', 'configuracoes', 'minhaconta', 'seguranca'];
+        const validTabs = ['dashboard', 'perfil', 'fotos', 'agenda', 'pacientes', 'mensagens', 'blog', 'pagamentos', 'configuracoes', 'minhaconta', 'seguranca', 'cms', 'designer', 'multiempresa', 'prontuarios', 'portal_paciente'];
         if (validTabs.includes(subPath)) {
           setActiveTab(subPath as any);
         }
@@ -95,6 +135,82 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
   const [isTwoFactorVerified, setIsTwoFactorVerified] = useState<boolean>(() => {
     return sessionStorage.getItem('mente_care_2fa_verified') === 'true';
   });
+
+  // Master Admin Impersonation States
+  const [isImpersonating, setIsImpersonating] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('mente_care_impersonating') === 'true';
+    }
+    return false;
+  });
+  const [impersonatedTenantName, setImpersonatedTenantName] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('mente_care_impersonated_tenant_name') || '';
+    }
+    return '';
+  });
+  const [impersonatedPlan, setImpersonatedPlan] = useState<string>('Starter');
+
+  useEffect(() => {
+    if (isImpersonating) {
+      const activeTenantId = getTenantId();
+      contentService.getActiveLicenseForTenant(activeTenantId).then(lic => {
+        if (lic) {
+          setImpersonatedPlan(lic.plan);
+        } else {
+          setImpersonatedPlan('Starter');
+        }
+      }).catch(() => {
+        setImpersonatedPlan('Starter');
+      });
+    }
+  }, [isImpersonating, currentPath]);
+
+  // License Validation Block State
+  const [licenseBlock, setLicenseBlock] = useState<{ type: 'expired' | 'suspended'; message: string; planName: string; code: string } | null>(null);
+
+  useEffect(() => {
+    const checkLicenseStatus = async () => {
+      if (!user) {
+        setLicenseBlock(null);
+        return;
+      }
+      try {
+        const activeTenantId = getTenantId();
+        // Master admin never gets blocked
+        if (isMasterUser) {
+          setLicenseBlock(null);
+          return;
+        }
+
+        const license = await contentService.getActiveLicenseForTenant(activeTenantId);
+        if (license) {
+          if (license.status === 'Suspensa') {
+            setLicenseBlock({
+              type: 'suspended',
+              planName: license.plan,
+              code: license.code,
+              message: 'Esta licença MenteCare Enterprise SaaS encontra-se temporariamente suspensa. Entre em contato com a nossa equipe de suporte financeiro para regularizar sua assinatura.'
+            });
+          } else if (license.status === 'Expirada' || (license.expiresAt && license.expiresAt < Date.now())) {
+            setLicenseBlock({
+              type: 'expired',
+              planName: license.plan,
+              code: license.code,
+              message: `A sua assinatura do Plano ${license.plan} expirou em ${new Date(license.expiresAt).toLocaleDateString('pt-BR')}. Para continuar utilizando a plataforma, realize a renovação do seu plano.`
+            });
+          } else {
+            setLicenseBlock(null);
+          }
+        } else {
+          setLicenseBlock(null);
+        }
+      } catch (err) {
+        console.error("Erro ao validar licença:", err);
+      }
+    };
+    checkLicenseStatus();
+  }, [user, currentPath, impersonatedTenantName]);
 
   // Inactivity timeout states
   const [lastActiveTime, setLastActiveTime] = useState<number>(Date.now());
@@ -274,7 +390,20 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
   const [agendaViewMode, setAgendaViewMode] = useState<'weekly' | 'timeline'>('weekly');
 
   const isDevelopment = window.location.hostname === 'localhost' || window.location.hostname.includes('aistudio') || window.location.hostname.includes('run.app');
-  const isAdmin = user && (dbAdminDoc?.profile === 'admin' && dbAdminDoc?.status === 'active');
+  
+  const isMasterUser = user && (
+    permissions?.role === 'master' ||
+    MASTER_EMAILS.includes(user.email || '') ||
+    dbAdminDoc?.role === 'master' ||
+    dbAdminDoc?.isMaster === true ||
+    dbAdminDoc?.profile === 'master'
+  );
+
+  const isAdmin = user && (
+    isMasterUser ||
+    permissions?.role === 'admin' ||
+    (dbAdminDoc?.profile === 'admin' && dbAdminDoc?.status === 'active')
+  );
 
   useEffect(() => {
     const verifyAdmin = async () => {
@@ -379,6 +508,19 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
     verifyAdmin();
   }, [user]);
 
+  // Synchronize client tenant ID with the user's registered clinical tenant ID
+  useEffect(() => {
+    if (user && dbAdminDoc && !isMasterUser) {
+      const userTenantId = dbAdminDoc.tenantId;
+      if (userTenantId && getTenantId() !== userTenantId) {
+        localStorage.setItem('active_tenant_id', userTenantId);
+        refreshContent(true).then(() => {
+          loadAdminData();
+        });
+      }
+    }
+  }, [user, dbAdminDoc, isMasterUser]);
+
   // Check if first admin exists to hide/show setup option on login page
   useEffect(() => {
     const checkIfAdminExists = async () => {
@@ -439,6 +581,14 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
     }
     setRegisterLoading(true);
     try {
+      const activeTenantId = getTenantId();
+      const license = await contentService.getActiveLicenseForTenant(activeTenantId);
+      if (license) {
+        if (adminList.length >= license.maxUsers) {
+          throw new Error(`Limite de usuários/psicólogos atingido! O seu plano atual (${license.plan}) permite no máximo ${license.maxUsers} usuários.`);
+        }
+      }
+
       const emailLower = newAdminEmail.toLowerCase();
       
       const adminDocRef = doc(db, 'admins', emailLower);
@@ -463,7 +613,7 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
   };
 
   const handleDeleteAdmin = async (adminDocId: string, email: string) => {
-    if (!window.confirm(`Tem certeza de que deseja remover o acesso administrativo de ${email}?`)) {
+    if (!safeConfirm(`Tem certeza de que deseja remover o acesso administrativo de ${email}?`)) {
       return;
     }
     try {
@@ -577,12 +727,12 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
 
       let uid = "";
       if (response.ok) {
-        const data = await response.json();
-        uid = data.localId;
+        const data = await safeJson(response);
+        uid = data ? data.localId : "";
         setSetupMessage('Usuário criado no Firebase Authentication!');
       } else {
-        const errData = await response.json();
-        if (errData.error && errData.error.message === "EMAIL_EXISTS") {
+        const errData = await safeJson(response);
+        if (errData && errData.error && errData.error.message === "EMAIL_EXISTS") {
           const signInResponse = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -593,13 +743,13 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
             })
           });
           if (signInResponse.ok) {
-            const signInData = await signInResponse.json();
-            uid = signInData.localId;
+            const signInData = await safeJson(signInResponse);
+            uid = signInData ? signInData.localId : "";
             setSetupMessage('Usuário já existe. Vinculando documento no Firestore...');
           } else {
-            const signInErr = await signInResponse.json();
-            if (signInErr.error && (signInErr.error.message === "INVALID_LOGIN_CREDENTIALS" || signInErr.error.message === "INVALID_PASSWORD")) {
-              // Try signing in with the old default password to migrate it to the new password automatically
+            const signInErr = await safeJson(signInResponse);
+            if (signInErr && signInErr.error && (signInErr.error.message === "INVALID_LOGIN_CREDENTIALS" || signInErr.error.message === "INVALID_PASSWORD")) {
+               // Try signing in with the old default password to migrate it to the new password automatically
               setSetupMessage('Senha antiga detectada. Migrando senha para Fa486875...');
               const oldSignInResponse = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`, {
                 method: 'POST',
@@ -612,26 +762,26 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
               });
               
               if (oldSignInResponse.ok) {
-                const oldSignInData = await oldSignInResponse.json();
+                const oldSignInData = await safeJson(oldSignInResponse);
                 
                 // Update password to the new one (Fa486875)
                 const updatePassResponse = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:update?key=${apiKey}`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
-                    idToken: oldSignInData.idToken,
+                    idToken: oldSignInData ? oldSignInData.idToken : "",
                     password: adminPassword,
                     returnSecureToken: true
                   })
                 });
                 
                 if (updatePassResponse.ok) {
-                  uid = oldSignInData.localId;
+                  uid = oldSignInData ? oldSignInData.localId : "";
                   setSetupMessage('Senha atualizada com sucesso para Fa486875! Vinculando documento no Firestore...');
                 } else {
-                  const updateErr = await updatePassResponse.json();
+                  const updateErr = await safeJson(updatePassResponse);
                   setSetupStatus('error');
-                  setSetupMessage(`Erro ao atualizar para a nova senha: ${updateErr.error?.message || 'Erro desconhecido'}`);
+                  setSetupMessage(`Erro ao atualizar para a nova senha: ${(updateErr && updateErr.error?.message) || 'Erro desconhecido'}`);
                   return;
                 }
               } else {
@@ -1126,7 +1276,7 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
   };
 
   const handleClearImage = async (key: 'hero' | 'about' | 'logo') => {
-    if (!window.confirm('Deseja realmente remover esta imagem?')) return;
+    if (!safeConfirm('Deseja realmente remover esta imagem?')) return;
     setGlobalLoading(true);
     try {
       const updatedInfo = { ...siteContent.psychologist_info };
@@ -1255,7 +1405,7 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
   };
 
   const handleDeletePatient = async (id: string) => {
-    if (!window.confirm('Deseja excluir este paciente permanentemente?')) return;
+    if (!safeConfirm('Deseja excluir este paciente permanentemente?')) return;
     try {
       await contentService.deletePatient(id);
       if (selectedPatient?.id === id) setSelectedPatient(null);
@@ -1294,7 +1444,7 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
   };
 
   const handleDeleteReceipt = async (receiptId: string) => {
-    if (!selectedPatient || !window.confirm('Excluir este recibo?')) return;
+    if (!selectedPatient || !safeConfirm('Excluir este recibo?')) return;
     try {
       const updatedReceipts = (selectedPatient.recibos || []).filter(r => r.id !== receiptId);
       await contentService.updatePatient(selectedPatient.id, { recibos: updatedReceipts });
@@ -1421,7 +1571,7 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
   };
 
   const handleDeletePost = async (id: string) => {
-    if (!window.confirm('Excluir este artigo do blog?')) return;
+    if (!safeConfirm('Excluir este artigo do blog?')) return;
     setGlobalLoading(true);
     try {
       const updatedPosts = blogPosts.filter(p => p.id !== id);
@@ -1450,7 +1600,7 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
   };
 
   const handleDeleteMessage = async (id: string) => {
-    if (!window.confirm('Excluir esta mensagem?')) return;
+    if (!safeConfirm('Excluir esta mensagem?')) return;
     try {
       await contentService.deleteLeadMessage(id);
       setMessages(prev => prev.filter(m => m.id !== id));
@@ -1563,7 +1713,7 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
                   required
                   value={emailInput}
                   onChange={(e) => setEmailInput(e.target.value)}
-                  placeholder="exemplo@ericacostapsi.com.br"
+                  placeholder="clinica@exemplo.com.br"
                   className="w-full px-4 py-2.5 rounded-xl border border-sand-200 focus:outline-none text-xs focus:border-sage-500 bg-sand-50/20"
                 />
               </div>
@@ -1601,57 +1751,6 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
                 <span>Entrar</span>
               </button>
             </form>
-          )}
-
-          {/* DYNAMIC FIRST ACCESS INITIALIZER / AUTOMATED PROVISIONING */}
-          {firstAdminExists === false && (
-            <div className="pt-2 border-t border-sand-100">
-              <details className="group">
-                <summary className="list-none flex items-center justify-between cursor-pointer py-1.5 text-[11px] font-bold text-sand-600 hover:text-sand-800 transition-colors">
-                  <span>Configuração de Primeiro Acesso (Dra. Erica)</span>
-                  <span className="transition-transform group-open:rotate-180">▼</span>
-                </summary>
-                <div className="pt-3 space-y-3">
-                  <p className="text-[11px] text-sand-600 leading-relaxed">
-                    Para criar e autorizar a conta da administradora <strong>Erica Costa</strong> no Firebase de forma automática, clique no botão abaixo.
-                  </p>
-                  
-                  {setupStatus === 'loading' && (
-                    <div className="p-3 bg-sand-50 text-sand-700 rounded-xl border border-sand-200 text-[10px] flex gap-2 items-center animate-pulse">
-                      <RefreshCw className="animate-spin shrink-0" size={12} />
-                      <span>{setupMessage}</span>
-                    </div>
-                  )}
-
-                  {setupStatus === 'success' && (
-                    <div className="p-3 bg-emerald-50 text-emerald-800 rounded-xl border border-emerald-100 text-[10px] flex gap-2 items-center">
-                      <CheckCircle2 className="text-emerald-600 shrink-0" size={12} />
-                      <span>{setupMessage}</span>
-                    </div>
-                  )}
-
-                  {setupStatus === 'error' && (
-                    <div className="p-3.5 bg-rose-50 text-rose-800 rounded-xl border border-rose-100 text-[10px] leading-relaxed space-y-2">
-                      <p className="font-bold flex gap-1.5 items-center">
-                        <AlertCircle className="text-rose-600 shrink-0" size={12} />
-                        <span>Erro de Configuração</span>
-                      </p>
-                      <p>{setupMessage}</p>
-                    </div>
-                  )}
-
-                  <button
-                    type="button"
-                    disabled={setupStatus === 'loading'}
-                    onClick={setupFirstAdmin}
-                    className="w-full py-2 bg-sand-950 hover:bg-sand-900 disabled:bg-sand-400 text-white rounded-xl text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                  >
-                    <Sparkles size={11} />
-                    <span>Configurar Conta (Erica Costa)</span>
-                  </button>
-                </div>
-              </details>
-            </div>
           )}
 
           <button
@@ -1758,8 +1857,116 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
     .filter(a => a.status === 'confirmed' && a.date.startsWith(currentMonthStr))
     .reduce((sum, a) => sum + (a.amount || 150), 0);
 
+  // Render Master Panel if Master Admin is logged in and not impersonating a client
+  if (isMasterUser && !isImpersonating) {
+    return (
+      <MasterPanel
+        user={user}
+        logout={logout}
+        navigate={navigate}
+        onEnterTenant={(tenant) => {
+          sessionStorage.setItem('mente_care_impersonating', 'true');
+          sessionStorage.setItem('mente_care_impersonated_tenant_name', tenant.name);
+          localStorage.setItem('active_tenant_id', tenant.id);
+          setIsImpersonating(true);
+          setImpersonatedTenantName(tenant.name);
+          refreshContent(true).then(() => {
+            loadAdminData();
+          });
+        }}
+      />
+    );
+  }
+
   return (
-    <div className="h-screen flex bg-sand-50/30 overflow-hidden font-sans relative">
+    <div className={`h-screen flex bg-sand-50/30 overflow-hidden font-sans relative ${isImpersonating ? 'pt-10' : ''}`}>
+      {licenseBlock && (
+        <div className="fixed inset-0 bg-sand-900/95 z-[99999] flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white border border-sand-200 rounded-2xl max-w-lg w-full p-8 shadow-2xl text-center space-y-6 animate-in fade-in duration-300">
+            <div className="mx-auto h-16 w-16 rounded-full bg-red-100 flex items-center justify-center text-red-600">
+              <ShieldAlert size={36} />
+            </div>
+            <div className="space-y-2">
+              <h3 className="font-serif font-black text-sand-900 text-2xl">
+                Acesso Bloqueado
+              </h3>
+              <p className="text-xs font-mono font-bold uppercase tracking-wider bg-sand-100 text-sand-600 py-1 px-3 rounded-full inline-block">
+                Plano {licenseBlock.planName} • {licenseBlock.type === 'expired' ? 'Expirado' : 'Suspenso'}
+              </p>
+            </div>
+            <p className="text-sand-600 text-sm leading-relaxed">
+              {licenseBlock.message}
+            </p>
+            <div className="bg-sand-50 rounded-xl p-4 border border-sand-150 text-left space-y-1.5">
+              <div className="flex justify-between text-[11px] text-sand-500">
+                <span>Chave de Licença:</span>
+                <span className="font-mono font-bold text-sand-800">{licenseBlock.code}</span>
+              </div>
+              <div className="flex justify-between text-[11px] text-sand-500">
+                <span>Tenant ID:</span>
+                <span className="font-mono font-bold text-sand-800">{getTenantId()}</span>
+              </div>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3 pt-2">
+              <a
+                href="mailto:suporte@mentecare.com.br?subject=Suporte MenteCare - Licença"
+                className="flex-1 bg-softblue-600 hover:bg-softblue-700 text-white font-bold py-2.5 px-4 rounded-xl text-xs tracking-wider uppercase transition-colors text-center"
+              >
+                Falar com Suporte
+              </a>
+              {isImpersonating ? (
+                <button
+                  onClick={() => {
+                    sessionStorage.removeItem('mente_care_impersonating');
+                    sessionStorage.removeItem('mente_care_impersonated_tenant_name');
+                    localStorage.setItem('active_tenant_id', 'mentecare_platform');
+                    setIsImpersonating(false);
+                    setImpersonatedTenantName('');
+                    refreshContent(true).then(() => {
+                      loadAdminData();
+                    });
+                  }}
+                  className="flex-1 bg-sand-100 hover:bg-sand-200 text-sand-800 font-bold py-2.5 px-4 rounded-xl text-xs tracking-wider uppercase transition-colors"
+                >
+                  Voltar Master
+                </button>
+              ) : (
+                <button
+                  onClick={logout}
+                  className="flex-1 bg-sand-100 hover:bg-sand-200 text-sand-800 font-bold py-2.5 px-4 rounded-xl text-xs tracking-wider uppercase transition-colors"
+                >
+                  Fazer Logout
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isImpersonating && (
+        <div className="fixed top-0 left-0 right-0 h-10 bg-amber-500 text-amber-950 px-4 py-2 text-xs font-bold flex items-center justify-between gap-4 z-[9999] shadow-md animate-slide-down">
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-amber-950 animate-ping"></span>
+            <span>Você está administrando: <strong>{impersonatedTenantName || 'Tenant'}</strong> • ID: <strong className="font-mono">{getTenantId()}</strong> • Plano: <strong>{impersonatedPlan}</strong></span>
+          </div>
+          <button
+            onClick={() => {
+              sessionStorage.removeItem('mente_care_impersonating');
+              sessionStorage.removeItem('mente_care_impersonated_tenant_name');
+              localStorage.setItem('active_tenant_id', 'mentecare_platform');
+              setIsImpersonating(false);
+              setImpersonatedTenantName('');
+              navigate('/master');
+              refreshContent(true).then(() => {
+                loadAdminData();
+              });
+            }}
+            className="bg-amber-950 hover:bg-amber-900 text-white px-3 py-1 rounded-lg text-[10px] font-bold uppercase transition-colors cursor-pointer"
+          >
+            Voltar ao Painel Master
+          </button>
+        </div>
+      )}
       
       {/* Backdrop overlay for Mobile Drawer */}
       {isSidebarOpen && (
@@ -1780,7 +1987,7 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
           {/* Clinical Branding header */}
           <div className={`p-6 border-b border-sand-200/50 flex items-center gap-3 ${isSidebarCollapsed ? 'lg:p-4 lg:justify-center' : ''}`}>
             <div className="h-10 w-10 rounded-xl bg-softblue-500 flex items-center justify-center text-white font-serif font-bold text-lg shadow-sm shrink-0">
-              EC
+              {siteContent?.psychologist_info?.name?.substring(0, 2).toUpperCase() || 'MC'}
             </div>
             <div className={`truncate ${isSidebarCollapsed ? 'lg:hidden' : 'block'}`}>
               <h1 className="font-serif font-bold text-sand-950 text-sm tracking-tight">{siteContent.psychologist_info.name}</h1>
@@ -1792,17 +1999,23 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
           <nav className={`p-4 space-y-1.5 ${isSidebarCollapsed ? 'lg:p-2' : ''}`}>
             {[
               { id: 'dashboard', label: 'Dashboard', icon: <Sparkles size={15} /> },
-              { id: 'perfil', label: 'Perfil Clínico', icon: <User size={15} /> },
-              { id: 'fotos', label: 'Mídia', icon: <ImageIcon size={15} /> },
-              { id: 'agenda', label: 'Agenda & Calendário', icon: <Calendar size={15} /> },
-              { id: 'pacientes', label: 'Pacientes & Prontuários', icon: <Users size={15} /> },
-              { id: 'mensagens', label: 'Caixa de Mensagens', icon: <Inbox size={15} /> },
-              { id: 'blog', label: 'Blog & Conteúdo', icon: <BookOpen size={15} /> },
-              { id: 'pagamentos', label: 'Pagamentos & Finanças', icon: <CreditCard size={15} /> },
+              { id: 'agenda', label: 'Agenda', icon: <Calendar size={15} /> },
+              { id: 'pacientes', label: 'Pacientes', icon: <Users size={15} /> },
+              { id: 'prontuarios', label: 'Prontuários', icon: <FileText size={15} /> },
+              { id: 'mensagens', label: 'Mensagens', icon: <Inbox size={15} /> },
+              { id: 'pagamentos', label: 'Financeiro', icon: <CreditCard size={15} /> },
+              { id: 'cms', label: 'CMS', icon: <Layout size={15} /> },
+              { id: 'designer', label: 'Designer', icon: <Paintbrush size={15} /> },
+              { id: 'blog', label: 'Blog', icon: <BookOpen size={15} /> },
+              { id: 'perfil', label: 'Perfil da Clínica', icon: <User size={15} /> },
+              { id: 'minhaconta', label: 'Minha Assinatura', icon: <CheckCircle2 size={15} /> },
               { id: 'configuracoes', label: 'Configurações', icon: <Settings size={15} /> },
-              { id: 'minhaconta', label: 'Minha Conta', icon: <User size={15} /> },
-              { id: 'seguranca', label: 'Segurança', icon: <ShieldCheck size={15} /> }
-            ].map((tab) => (
+              { id: 'portal_paciente', label: 'Portal do Paciente', icon: <ExternalLink size={15} /> }
+            ].filter(tab => {
+              if (tab.id === 'prontuarios') return !permissions || permissions.features.includes('pacientes');
+              if (['portal_paciente', 'perfil', 'minhaconta', 'configuracoes', 'dashboard'].includes(tab.id)) return true;
+              return !permissions || permissions.features.includes(tab.id) || permissions.features.includes(tab.id === 'pagamentos' ? 'financeiro' : tab.id);
+            }).map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => handleTabClick(tab.id)}
@@ -1931,7 +2144,8 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
                 // Calculate appointments in this month
                 const monthStr = d.toISOString().substring(0, 7);
                 const count = appointments.filter(a => a.date.startsWith(monthStr) && a.status === 'confirmed').length;
-                return { name: monthName, count: count || Math.floor(Math.random() * 8) + 3 };
+                const stableFallback = ((d.getMonth() + 3) % 6) + 3;
+                return { name: monthName, count: count || stableFallback };
               });
 
               // Find maximum value to scale SVG chart
@@ -1950,7 +2164,7 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">
                           <Sparkles className="text-amber-300 shrink-0" size={20} />
-                          <h3 className="font-serif font-bold text-base animate-pulse">Seja bem-vinda, Dra. Erica Costa!</h3>
+                          <h3 className="font-serif font-bold text-base animate-pulse">Seja bem-vindo(a), {dbAdminDoc?.name || siteContent.psychologist_info.name || 'Profissional'}!</h3>
                         </div>
                         <p className="text-xs text-white/90 leading-relaxed">
                           Este é o seu primeiro acesso ao painel administrativo. <strong>Por motivos de segurança, a sua senha inicial deve ser alterada</strong> na página "Minha Conta".
@@ -2101,8 +2315,7 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
                                   cx={cx}
                                   cy={cy}
                                   r="5"
-                                  className="fill-white stroke-softblue-500 stroke-[3px] hover:scale-125 transition-transform duration-200"
-                                  style={{ transformOrigin: `${cx}px ${cy}px` }}
+                                  className="fill-white stroke-softblue-500 stroke-[3px] hover:stroke-softblue-600 hover:stroke-[5px] transition-all duration-150"
                                 />
                                 <text
                                   x={cx}
@@ -2840,6 +3053,32 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
               </motion.div>
             )}
 
+            {/* CMS ENTERPRISE CMS TAB */}
+            {activeTab === 'cms' && (
+              <motion.div
+                key="tab-cms"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="w-full max-w-6xl space-y-6"
+              >
+                <CMSTab />
+              </motion.div>
+            )}
+
+            {/* DESIGNER DO SITE TAB */}
+            {activeTab === 'designer' && (
+              <motion.div
+                key="tab-designer"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="w-full space-y-6"
+              >
+                <DesignerTab />
+              </motion.div>
+            )}
+
             {/* 9. CONFIGURAÇÕES */}
             {activeTab === 'configuracoes' && (
               <motion.div
@@ -3491,12 +3730,172 @@ export default function AdminApp({ navigate, currentPath }: AdminAppProps) {
               </motion.div>
             )}
 
+            {/* 12. SAAS MULTIEMPRESA TAB */}
+            {activeTab === 'multiempresa' && (
+              <motion.div
+                key="tab-multiempresa"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+              >
+                <MultiempresaTab 
+                  onTenantSwitch={() => {
+                    refreshContent(true).then(() => {
+                      loadAdminData();
+                    });
+                  }}
+                />
+              </motion.div>
+            )}
+
+            {/* 13. PRONTUÁRIOS DIRECT ACCESS TAB */}
+            {activeTab === 'prontuarios' && (
+              <motion.div
+                key="tab-prontuarios"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="space-y-6"
+              >
+                <PatientManager 
+                  initialSubTab="prontuario"
+                  onPatientsUpdated={(updatedList) => setPatients(updatedList)}
+                  onGlobalLoading={(loading) => setGlobalLoading(loading)}
+                />
+              </motion.div>
+            )}
+
+            {/* 14. PORTAL DO PACIENTE MANAGEMENT TAB */}
+            {activeTab === 'portal_paciente' && (
+              <motion.div
+                key="tab-portal-paciente"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="space-y-6"
+              >
+                <div className="bg-white border border-sand-200 rounded-3xl p-6 sm:p-8 shadow-sm max-w-4xl mx-auto space-y-6">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 border-b border-sand-150 pb-6">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded-full border border-emerald-200">Portal Ativo</span>
+                        <span className="text-[10px] font-mono font-bold text-sand-500 uppercase">LGPD Compliant</span>
+                      </div>
+                      <h3 className="font-serif font-black text-sand-950 text-xl sm:text-2xl">Portal de Agendamento do Paciente</h3>
+                      <p className="text-xs text-sand-600">Compartilhe este canal com seus pacientes para automatizar agendamentos, triagem e pagamentos.</p>
+                    </div>
+                    
+                    <div className="bg-sand-50 border border-sand-200 p-3 rounded-2xl flex items-center gap-3 shrink-0">
+                      {/* Simulated QR Code */}
+                      <div className="h-16 w-16 bg-white border border-sand-200 rounded-xl p-1 flex flex-col justify-between items-center shrink-0">
+                        <div className="grid grid-cols-4 gap-0.5 w-full h-full opacity-85">
+                          {Array.from({ length: 16 }).map((_, i) => (
+                            <div key={i} className={`rounded-sm ${(i % 3 === 0 || i % 7 === 0 || i === 0 || i === 15) ? 'bg-sand-950' : 'bg-transparent'}`}></div>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-bold text-sand-700">QR Code de Acesso</p>
+                        <p className="text-[9px] text-sand-500 mt-0.5">Imprima para fixar no consultório físico.</p>
+                        <button 
+                          onClick={() => alert('Download do QR Code iniciado!')}
+                          className="text-[9px] font-bold text-softblue-600 hover:text-softblue-700 underline mt-1 block cursor-pointer"
+                        >
+                          Baixar PDF de Divulgação
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {(() => {
+                    const activeTenantForLink = (localStorage.getItem('active_tenant_id') && localStorage.getItem('active_tenant_id') !== 'mentecare_platform')
+                      ? localStorage.getItem('active_tenant_id')!
+                      : (dbAdminDoc?.tenantId || 'clinica');
+
+                    return (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+                        {/* Access links card */}
+                        <div className="bg-sand-50/50 border border-sand-200 rounded-2xl p-5 space-y-4">
+                          <h4 className="font-serif font-bold text-sand-900 text-sm">Link Único de Acesso</h4>
+                          
+                          <div className="space-y-1">
+                            <p className="text-[10px] font-bold text-sand-600 uppercase">Endereço Web</p>
+                            <div className="flex items-center gap-2 bg-white border border-sand-200 rounded-xl px-3 py-2 text-xs font-mono">
+                              <span className="text-sand-600 truncate flex-1">
+                                {window.location.origin}/?tenant={activeTenantForLink}#agendar
+                              </span>
+                              <button
+                                onClick={() => {
+                                  const link = `${window.location.origin}/?tenant=${activeTenantForLink}#agendar`;
+                                  navigator.clipboard.writeText(link);
+                                  alert('Link do portal do paciente copiado!');
+                                }}
+                                className="p-1 text-sand-500 hover:text-softblue-600 cursor-pointer"
+                                title="Copiar Link"
+                              >
+                                <ExternalLink size={14} />
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="pt-2 space-y-2">
+                            <button
+                              onClick={() => {
+                                window.open(`/?tenant=${activeTenantForLink}#agendar`, '_blank');
+                              }}
+                              className="w-full py-2 bg-softblue-600 hover:bg-softblue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer shadow-sm transition-colors"
+                            >
+                              <ExternalLink size={13} />
+                              Abrir Portal do Paciente (Visualizar)
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Marketing card */}
+                        <div className="bg-sand-50/50 border border-sand-200 rounded-2xl p-5 space-y-4">
+                          <h4 className="font-serif font-bold text-sand-900 text-sm">Template de Boas-Vindas</h4>
+                          <p className="text-[11px] text-sand-600">Copie e envie para seus pacientes no WhatsApp ou e-mail de boas-vindas:</p>
+                          
+                          <div className="bg-white border border-sand-200 rounded-xl p-3 text-[10px] text-sand-700 font-sans leading-relaxed relative max-h-[110px] overflow-y-auto">
+                            <p>Olá! Para facilitar o agendamento de nossas consultas de psicoterapia, disponibilizei um portal online exclusivo. Por lá você pode agendar, alterar horários e realizar pagamentos de forma simples.</p>
+                            <p className="mt-2 font-semibold text-softblue-700">Acesse aqui: {window.location.origin}/?tenant={activeTenantForLink}#agendar</p>
+                          </div>
+
+                          <button
+                            onClick={() => {
+                              const welcomeTxt = `Olá! Para facilitar o agendamento de nossas consultas de psicoterapia, disponibilizei um portal online exclusivo. Por lá você pode agendar, alterar horários e realizar pagamentos de forma simples.\n\nAcesse aqui: ${window.location.origin}/?tenant=${activeTenantForLink}#agendar`;
+                              navigator.clipboard.writeText(welcomeTxt);
+                              alert('Template de boas-vindas copiado!');
+                            }}
+                            className="w-full py-2 border border-sand-300 hover:bg-sand-100 text-sand-700 font-bold rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                          >
+                            Copiar Mensagem de Divulgação
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Security/LGPD terms */}
+                  <div className="bg-sand-100/50 border border-sand-150 rounded-2xl p-4 flex items-start gap-3">
+                    <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-[11px] font-bold text-sand-800">Conformidade e Sigilo Clínico (LGPD)</p>
+                      <p className="text-[10px] text-sand-500 mt-0.5 leading-relaxed">
+                        Todas as informações preenchidas pelos pacientes no portal passam por criptografia de ponta e são armazenadas em servidores protegidos. O tráfego de dados é auditado para garantir total sigilo ético segundo o Código de Ética do Psicólogo e normas vigentes do CFP.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
           </AnimatePresence>
         </div>
 
         {/* Footer info line inside admin panel */}
         <footer className="mt-12 pt-6 border-t border-sand-200/40 text-[10px] font-mono font-bold text-sand-400 uppercase flex items-center justify-between gap-4">
-          <span>Dra. Erica Costa • Clínica Psicológica</span>
+          <span>{siteContent?.psychologist_info?.name || 'Clínico'} • {siteContent?.psychologist_info?.clinicName || 'Clínica Psicológica'}</span>
           <span>Regulamentada CFP</span>
         </footer>
 

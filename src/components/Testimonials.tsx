@@ -1,17 +1,21 @@
 import { Quote, Star } from 'lucide-react';
 import { motion } from 'motion/react';
+import { useSiteContent } from '../context/SiteContext';
 
 export default function Testimonials() {
+  const { siteContent } = useSiteContent();
+  const doctorName = siteContent.psychologist_info?.name || 'nossos profissionais';
+
   const testimonialsList = [
     {
-      text: "A Dra. Erica é extremamente atenciosa e profissional. Em poucas sessões consegui clarear questões de ansiedade que me acompanhavam há anos. O formato online é excelente e super prático.",
+      text: `O atendimento com ${doctorName} foi extremamente atencioso e profissional. Em poucas sessões consegui clarear questões de ansiedade que me acompanhavam há anos. O formato online é excelente e super prático.`,
       author: "L. M.",
       age: "28 anos",
       location: "São Paulo / SP",
       treatment: "Psicoterapia Individual"
     },
     {
-      text: "Um acolhimento indescritível. Me senti seguro desde a primeira sessão para falar sobre minhas dificuldades pessoais. A abordagem dela é muito prática e baseada em evidências reais.",
+      text: "Um acolhimento indescritível. Me senti seguro desde a primeira sessão para falar sobre minhas dificuldades pessoais. A abordagem é muito prática e baseada em evidências reais.",
       author: "G. R.",
       age: "34 anos",
       location: "Rio de Janeiro / RJ",
@@ -39,7 +43,7 @@ export default function Testimonials() {
             Experiências com a Psicoterapia
           </h2>
           <p className="text-sm text-sand-800">
-            Abaixo estão relatos reais de pessoas que passaram pelo processo terapêutico com a Psicóloga Erica Costa. Para preservar a privacidade e em conformidade estrita com o Código de Ética Profissional (CFP), todas as identidades foram preservadas por meio de iniciais.
+            Abaixo estão relatos reais de pessoas que passaram pelo processo terapêutico com {doctorName}. Para preservar a privacidade e em conformidade estrita com o Código de Ética Profissional (CFP), todas as identidades foram preservadas por meio de iniciais.
           </p>
         </div>
 

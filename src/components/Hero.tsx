@@ -1,13 +1,15 @@
 import { ArrowRight, Leaf } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useSiteContent } from '../context/SiteContext';
+import { getDesignerProps } from '../utils/designerStyles';
 import defaultHeroImage from '../assets/images/erica_costa_bookshelf_1783981387672.jpg';
 
 export default function Hero() {
-  const { siteContent } = useSiteContent();
-  const { name, bioShort, whatsappUrl, heroImageUrl } = siteContent.psychologist_info;
+  const { siteContent, isDesignerMode, selectedElementId, setSelectedElementId } = useSiteContent();
+  const { name = 'Psicólogo(a)', bioShort = '', whatsappUrl = '#', heroImageUrl = '', crp = '' } = siteContent?.psychologist_info || {};
 
   const scrollToSection = (id: string) => {
+    if (isDesignerMode) return; // Prevent navigation during layout design
     const element = document.getElementById(id);
     if (element) {
       const offset = 80;
@@ -26,6 +28,13 @@ export default function Hero() {
   return (
     <section
       id="home"
+      {...getDesignerProps(siteContent, 'hero', isDesignerMode, selectedElementId)}
+      onClick={(e) => {
+        if (isDesignerMode) {
+          e.stopPropagation();
+          setSelectedElementId('hero');
+        }
+      }}
       className="relative min-h-screen flex items-center pt-28 pb-16 bg-gradient-to-br from-softblue-100/40 via-sand-50 to-white overflow-hidden animate-fade-in"
     >
       {/* Decorative background shapes */}
@@ -41,37 +50,67 @@ export default function Hero() {
               initial={{ opacity: 0, y: 15 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6 }}
+              {...getDesignerProps(siteContent, 'hero.tag', isDesignerMode, selectedElementId)}
+              onClick={(e) => {
+                if (isDesignerMode) {
+                  e.stopPropagation();
+                  setSelectedElementId('hero.tag');
+                }
+              }}
               className="inline-flex items-center space-x-2 bg-sage-100 text-sage-800 px-3.5 py-1.5 rounded-full text-xs font-semibold tracking-wide w-fit"
             >
               <Leaf size={14} className="text-sage-500 fill-sage-100" />
-              <span>Espaço Acolhedor & Ético</span>
+              <span>{siteContent.cms_content?.hero?.tag || "Espaço Acolhedor & Ético"}</span>
             </motion.div>
 
             <motion.h1
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.7, delay: 0.1 }}
+              {...getDesignerProps(siteContent, 'hero.title', isDesignerMode, selectedElementId)}
+              onClick={(e) => {
+                if (isDesignerMode) {
+                  e.stopPropagation();
+                  setSelectedElementId('hero.title');
+                }
+              }}
               className="text-4xl sm:text-5xl md:text-6xl font-serif text-sand-950 tracking-tight leading-[1.1]"
             >
-              Psicóloga <span className="text-sage-600 font-medium italic">{name}</span>
+              {siteContent.cms_content?.hero?.title || (
+                <>Psicóloga <span className="text-sage-600 font-medium italic">{name}</span></>
+              )}
             </motion.h1>
 
             <motion.p
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.7, delay: 0.2 }}
+              {...getDesignerProps(siteContent, 'hero.subtitle', isDesignerMode, selectedElementId)}
+              onClick={(e) => {
+                if (isDesignerMode) {
+                  e.stopPropagation();
+                  setSelectedElementId('hero.subtitle');
+                }
+              }}
               className="text-xl sm:text-2xl font-serif text-sand-900 tracking-tight leading-relaxed max-w-xl font-medium border-l-2 border-sage-300 pl-4"
             >
-              "{bioShort}"
+              "{siteContent.cms_content?.hero?.subtitle || bioShort}"
             </motion.p>
 
             <motion.p
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.7, delay: 0.25 }}
+              {...getDesignerProps(siteContent, 'hero.body', isDesignerMode, selectedElementId)}
+              onClick={(e) => {
+                if (isDesignerMode) {
+                  e.stopPropagation();
+                  setSelectedElementId('hero.body');
+                }
+              }}
               className="text-base text-sand-800 font-normal leading-relaxed max-w-xl"
             >
-              Atendimento psicológico online com acolhimento, ética, escuta qualificada e respeito à individualidade de cada pessoa.
+              {siteContent.cms_content?.hero?.body || "Atendimento psicológico online com acolhimento, ética, escuta qualificada e respeito à individualidade de cada pessoa."}
             </motion.p>
 
             <motion.div
@@ -81,20 +120,36 @@ export default function Hero() {
               className="flex flex-col sm:flex-row gap-4 pt-4"
             >
               <button
-                onClick={() => scrollToSection('agendamento')}
+                onClick={(e) => {
+                  if (isDesignerMode) {
+                    e.stopPropagation();
+                    setSelectedElementId('hero.button_primary');
+                  } else {
+                    scrollToSection('agendamento');
+                  }
+                }}
+                {...getDesignerProps(siteContent, 'hero.button_primary', isDesignerMode, selectedElementId)}
                 className="inline-flex items-center justify-center bg-softblue-600 hover:bg-softblue-700 text-white font-medium px-8 py-4 rounded-xl shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-300 cursor-pointer text-base text-center group"
               >
-                Agende sua primeira consulta
+                {siteContent.cms_content?.hero?.button_primary || "Agende sua primeira consulta"}
                 <ArrowRight size={18} className="ml-2 transition-transform group-hover:translate-x-1" />
               </button>
 
               <a
-                href={whatsappUrl}
-                target="_blank"
+                href={isDesignerMode ? "#" : whatsappUrl}
+                onClick={(e) => {
+                  if (isDesignerMode) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSelectedElementId('hero.button_secondary');
+                  }
+                }}
+                {...getDesignerProps(siteContent, 'hero.button_secondary', isDesignerMode, selectedElementId)}
+                target={isDesignerMode ? undefined : "_blank"}
                 rel="noopener noreferrer"
                 className="inline-flex items-center justify-center bg-white hover:bg-sand-100 text-sand-950 font-medium px-8 py-4 rounded-xl shadow-sm hover:shadow-md border border-sand-300/80 hover:scale-[1.02] active:scale-[0.98] transition-all duration-300 cursor-pointer text-base text-center"
               >
-                Falar pelo WhatsApp
+                {siteContent.cms_content?.hero?.button_secondary || "Falar pelo WhatsApp"}
               </a>
             </motion.div>
 
@@ -103,19 +158,55 @@ export default function Hero() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.5, duration: 0.8 }}
-              className="pt-8 border-t border-sand-200 grid grid-cols-3 gap-6 max-w-md"
+              className="pt-8 border-t border-sand-200 grid grid-cols-3 gap-6 max-w-md animate-fade-in"
             >
-              <div>
-                <p className="text-2xl font-serif font-bold text-sage-800">100%</p>
-                <p className="text-xs text-sand-700 font-medium">Sigiloso e Ético</p>
+              <div 
+                {...getDesignerProps(siteContent, 'hero.stat1', isDesignerMode, selectedElementId)}
+                onClick={(e) => {
+                  if (isDesignerMode) {
+                    e.stopPropagation();
+                    setSelectedElementId('hero.stat1');
+                  }
+                }}
+              >
+                <p className="text-2xl font-serif font-bold text-sage-800">
+                  {siteContent.cms_content?.hero?.stat1_title || "100%"}
+                </p>
+                <p className="text-xs text-sand-700 font-medium">
+                  {siteContent.cms_content?.hero?.stat1_desc || "Sigiloso e Ético"}
+                </p>
               </div>
-              <div>
-                <p className="text-2xl font-serif font-bold text-sage-800">TCC</p>
-                <p className="text-xs text-sand-700 font-medium">Prática Científica</p>
+              <div
+                {...getDesignerProps(siteContent, 'hero.stat2', isDesignerMode, selectedElementId)}
+                onClick={(e) => {
+                  if (isDesignerMode) {
+                    e.stopPropagation();
+                    setSelectedElementId('hero.stat2');
+                  }
+                }}
+              >
+                <p className="text-2xl font-serif font-bold text-sage-800">
+                  {siteContent.cms_content?.hero?.stat2_title || "TCC"}
+                </p>
+                <p className="text-xs text-sand-700 font-medium">
+                  {siteContent.cms_content?.hero?.stat2_desc || "Prática Científica"}
+                </p>
               </div>
-              <div>
-                <p className="text-2xl font-serif font-bold text-sage-800">Online</p>
-                <p className="text-xs text-sand-700 font-medium">Para todo o Brasil</p>
+              <div
+                {...getDesignerProps(siteContent, 'hero.stat3', isDesignerMode, selectedElementId)}
+                onClick={(e) => {
+                  if (isDesignerMode) {
+                    e.stopPropagation();
+                    setSelectedElementId('hero.stat3');
+                  }
+                }}
+              >
+                <p className="text-2xl font-serif font-bold text-sage-800">
+                  {siteContent.cms_content?.hero?.stat3_title || "Online"}
+                </p>
+                <p className="text-xs text-sand-700 font-medium">
+                  {siteContent.cms_content?.hero?.stat3_desc || "Para todo o Brasil"}
+                </p>
               </div>
             </motion.div>
           </div>
@@ -126,13 +217,20 @@ export default function Hero() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.8, delay: 0.2 }}
+              {...getDesignerProps(siteContent, 'hero.image', isDesignerMode, selectedElementId)}
+              onClick={(e) => {
+                if (isDesignerMode) {
+                  e.stopPropagation();
+                  setSelectedElementId('hero.image');
+                }
+              }}
               className="relative w-full max-w-sm md:max-w-md aspect-[4/5] rounded-[2.5rem] overflow-hidden shadow-2xl border border-sand-200/60 p-2.5 bg-white"
             >
               {/* Main welcoming image with elegant treatment */}
               <div className="w-full h-full rounded-[2rem] overflow-hidden relative bg-sand-50">
                 <img
                   src={heroImageUrl || defaultHeroImage}
-                  alt="Psicóloga Erica Costa"
+                  alt={name || "Profissional"}
                   className="w-full h-full object-cover object-[center_20%] transition-transform duration-700 hover:scale-[1.03] brightness-[1.01] contrast-[1.02] saturate-[1.01]"
                   referrerPolicy="no-referrer"
                 />
@@ -148,17 +246,18 @@ export default function Hero() {
                 </div>
                 <div>
                   <h3 className="text-sm font-semibold text-sand-950 font-serif leading-none mb-1">{name}</h3>
-                  {siteContent.psychologist_info.crp ? (
-                    <p className="text-xs text-sand-700 font-mono leading-none">{siteContent.psychologist_info.crp}</p>
+                  {crp ? (
+                    <p className="text-xs text-sand-700 font-mono leading-none">{crp}</p>
                   ) : (
                     <p className="text-xs text-sage-600 font-sans font-medium leading-none">Psicoterapia Online</p>
-                  )}
+                  )
+                  }
                 </div>
               </div>
             </motion.div>
 
             {/* Organic plant accent or float details */}
-            <div className="absolute -top-6 -right-6 w-24 h-24 bg-softblue-50 border border-softblue-100 rounded-full -z-10 flex items-center justify-center animate-bounce duration-1000">
+            <div className="absolute -top-6 -right-6 w-24 h-24 bg-softblue-50 border border-softblue-100 rounded-full -z-10 flex items-center justify-center">
               <span className="text-3xl">🍃</span>
             </div>
           </div>

@@ -442,7 +442,7 @@ export default function PacientesTab({
                     <h4 className="text-xs font-bold uppercase text-sand-900 tracking-wider font-mono">Anotações Clínicas Privadas</h4>
                     <span className="text-[9px] font-mono bg-rose-50 text-rose-700 border border-rose-100 px-2 py-0.5 rounded font-bold uppercase flex items-center gap-1">
                       <Lock size={10} />
-                      Apenas Erica Costa
+                      Uso Exclusivo do Terapeuta
                     </span>
                   </div>
 

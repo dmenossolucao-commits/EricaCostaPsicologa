@@ -4,7 +4,8 @@ import {
   Trash2, Clock, Laptop, Smartphone, Search, Filter, Database, Mail, X, ShieldCheck
 } from 'lucide-react';
 import { db, auth } from '../../firebase';
-import { collection, getDocs, doc, getDoc, updateDoc, setDoc, deleteDoc } from 'firebase/firestore';
+import { collection } from 'firebase/firestore';
+import { getDocs, doc, getDoc, updateDoc, setDoc, deleteDoc } from '../../services/contentService';
 import { AuditLog } from '../../types';
 import { contentService, logAuditAction } from '../../services/contentService';
 

@@ -1,5 +1,5 @@
 import { 
-  doc, 
+  doc as firebaseDoc, 
   getDoc as firebaseGetDoc, 
   setDoc as firebaseSetDoc, 
   collection, 
@@ -15,10 +15,30 @@ import {
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage, auth } from '../firebase';
 
+export function doc(referenceOrDb: any, path?: string, ...pathSegments: string[]): any {
+  if (path !== undefined) {
+    return firebaseDoc(referenceOrDb, path, ...pathSegments);
+  }
+  return firebaseDoc(referenceOrDb);
+}
+
 function isPermissionDenied(err: any): boolean {
   if (!err) return false;
   const msg = (err.message || String(err)).toLowerCase();
   return msg.includes('permission') || msg.includes('insufficient') || err.code === 'permission-denied';
+}
+
+async function safeJson(response: Response): Promise<any> {
+  const text = await response.text();
+  if (!text || text.trim() === '') {
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    console.error('Failed to parse JSON:', err, 'Response text was:', text);
+    return null;
+  }
 }
 
 function getCollectionName(ref: any): string {
@@ -61,32 +81,54 @@ function getDocDetails(docRef: any) {
 }
 
 function getLocalData<T>(collectionName: string, defaultData: T[] = []): T[] {
-  const saved = localStorage.getItem(`fs_fallback_${collectionName}`);
-  return saved ? JSON.parse(saved) : defaultData;
+  try {
+    const saved = localStorage.getItem(`fs_fallback_${collectionName}`);
+    if (!saved) return defaultData;
+    const parsed = JSON.parse(saved);
+    return Array.isArray(parsed) ? parsed : defaultData;
+  } catch (e) {
+    return defaultData;
+  }
 }
 
 function setLocalData<T>(collectionName: string, data: T[]): void {
   localStorage.setItem(`fs_fallback_${collectionName}`, JSON.stringify(data));
 }
 
-async function getDoc(docRef: any): Promise<any> {
+export async function getDoc(docRef: any): Promise<any> {
   const { colName, docId } = getDocDetails(docRef);
+  const activeTenantId = getTenantId();
   try {
     const snap = await firebaseGetDoc(docRef);
-    if (snap.exists() && colName) {
-      const data = snap.data() || {};
-      if (colName === 'site_content' && docId === 'main') {
-        localStorage.setItem('fs_fallback_site_content', JSON.stringify(data));
-      } else {
-        const list = getLocalData<any>(colName);
-        const index = list.findIndex(item => item.id === docId);
-        const updatedItem = { ...(data as any), id: docId };
-        if (index !== -1) {
-          list[index] = updatedItem;
+    if (snap.exists()) {
+      const data: any = snap.data() || {};
+      
+      // Strict Tenant Check on Read
+      const isGlobalCol = ['tenants', 'licenses', 'login_attempts', 'audit_logs', 'trash_bin'].includes(colName);
+      if (!isGlobalCol && activeTenantId !== 'mentecare_platform' && data.tenantId && data.tenantId !== activeTenantId) {
+        console.warn(`[Tenant Isolation] Bloqueado acesso de leitura ao documento de outro tenant: ${colName}/${docId}`);
+        return {
+          id: docId,
+          ref: docRef,
+          exists: () => false,
+          data: () => null
+        };
+      }
+
+      if (colName) {
+        if (colName === 'site_content' && docId === 'mentecare_platform') {
+          localStorage.setItem('fs_fallback_site_content_platform', JSON.stringify(data));
         } else {
-          list.push(updatedItem);
+          const list = getLocalData<any>(colName);
+          const index = list.findIndex(item => item.id === docId);
+          const updatedItem = { ...(data as any), id: docId };
+          if (index !== -1) {
+            list[index] = updatedItem;
+          } else {
+            list.push(updatedItem);
+          }
+          setLocalData(colName, list);
         }
-        setLocalData(colName, list);
       }
     }
     return snap;
@@ -94,8 +136,8 @@ async function getDoc(docRef: any): Promise<any> {
     if (isPermissionDenied(err)) {
       console.warn(`[Firestore Fallback] Read permission denied for ${colName}/${docId}. Using localStorage.`);
       let data: any = null;
-      if (colName === 'site_content' && docId === 'main') {
-        const saved = localStorage.getItem('fs_fallback_site_content');
+      if (colName === 'site_content' && docId === 'mentecare_platform') {
+        const saved = localStorage.getItem('fs_fallback_site_content_platform');
         data = saved ? JSON.parse(saved) : null;
       } else if (colName) {
         const list = getLocalData<any>(colName);
@@ -112,15 +154,33 @@ async function getDoc(docRef: any): Promise<any> {
   }
 }
 
-async function getDocs(queryOrColRef: any): Promise<any> {
+export async function getDocs(queryOrColRef: any): Promise<any> {
   const colName = getCollectionName(queryOrColRef);
+  const activeTenantId = getTenantId();
   try {
     const snap = await firebaseGetDocs(queryOrColRef);
     const list = snap.docs.map((docSnapshot: any) => ({ ...docSnapshot.data(), id: docSnapshot.id }));
     if (list.length > 0 && colName) {
       setLocalData(colName, list);
     }
-    return snap;
+
+    // Filter docs from Firebase to only match current tenant
+    const filteredDocs = snap.docs.filter((docSnapshot: any) => {
+      const data = docSnapshot.data() || {};
+      const isGlobalCol = ['tenants', 'licenses', 'login_attempts', 'audit_logs', 'trash_bin'].includes(colName);
+      if (isGlobalCol) return true;
+      if (data.tenantId) {
+        return data.tenantId === activeTenantId;
+      }
+      return activeTenantId === 'mentecare_platform';
+    });
+
+    return {
+      ...snap,
+      empty: filteredDocs.length === 0,
+      size: filteredDocs.length,
+      docs: filteredDocs
+    };
   } catch (err: any) {
     if (isPermissionDenied(err)) {
       console.warn(`[Firestore Fallback] List permission denied for ${colName}. Using localStorage.`);
@@ -128,14 +188,24 @@ async function getDocs(queryOrColRef: any): Promise<any> {
       if (colName === 'blog_posts') {
         defaultData = BLOG_POSTS;
       } else if (colName === 'site_content') {
-        const saved = localStorage.getItem('fs_fallback_site_content');
+        const saved = localStorage.getItem('fs_fallback_site_content_platform');
         defaultData = saved ? [JSON.parse(saved)] : [DEFAULT_CONTENT];
       }
       const list = getLocalData<any>(colName, defaultData);
+      
+      const filteredList = list.filter((item: any) => {
+        const isGlobalCol = ['tenants', 'licenses', 'login_attempts', 'audit_logs', 'trash_bin'].includes(colName);
+        if (isGlobalCol) return true;
+        if (item.tenantId) {
+          return item.tenantId === activeTenantId;
+        }
+        return activeTenantId === 'mentecare_platform';
+      });
+
       return {
-        empty: list.length === 0,
-        size: list.length,
-        docs: list.map(item => ({
+        empty: filteredList.length === 0,
+        size: filteredList.length,
+        docs: filteredList.map(item => ({
           id: item.id || 'id_' + Math.random().toString(36).substring(2, 7),
           ref: { id: item.id, path: `${colName}/${item.id}` },
           data: () => item
@@ -146,17 +216,32 @@ async function getDocs(queryOrColRef: any): Promise<any> {
   }
 }
 
-async function setDoc(docRef: any, data: any, options?: any): Promise<void> {
+export async function setDoc(docRef: any, data: any, options?: any): Promise<void> {
   const { colName, docId } = getDocDetails(docRef);
+  const activeTenantId = getTenantId();
+  const dataWithTenant = {
+    ...data,
+    tenantId: data.tenantId || activeTenantId
+  };
+
+  // Enforce Tenant Check on Write / Update
+  const isGlobalCol = ['tenants', 'licenses', 'login_attempts', 'audit_logs', 'trash_bin'].includes(colName);
+  if (!isGlobalCol && activeTenantId !== 'mentecare_platform' && dataWithTenant.tenantId && dataWithTenant.tenantId !== activeTenantId) {
+    throw new Error(`[Tenant Isolation] Permissão negada para salvar documento em outro tenant.`);
+  }
+
   if (colName) {
-    if (colName === 'site_content' && docId === 'main') {
-      localStorage.setItem('fs_fallback_site_content', JSON.stringify(data));
+    if (colName === 'site_content') {
+      localStorage.setItem(`fs_fallback_site_content_${docId}`, JSON.stringify(dataWithTenant));
+      if (docId === 'mentecare_platform') {
+        localStorage.setItem('fs_fallback_site_content_platform', JSON.stringify(dataWithTenant));
+      }
     } else {
       const list = getLocalData<any>(colName);
       const index = list.findIndex(item => item.id === docId);
-      const updatedItem = { ...data, id: docId };
+      const updatedItem = { ...dataWithTenant, id: docId };
       if (index !== -1) {
-        list[index] = options?.merge ? { ...list[index], ...data } : updatedItem;
+        list[index] = options?.merge ? { ...list[index], ...dataWithTenant } : updatedItem;
       } else {
         list.push(updatedItem);
       }
@@ -164,7 +249,7 @@ async function setDoc(docRef: any, data: any, options?: any): Promise<void> {
     }
   }
   try {
-    await firebaseSetDoc(docRef, data, options);
+    await firebaseSetDoc(docRef, dataWithTenant, options);
   } catch (err: any) {
     if (isPermissionDenied(err)) {
       console.warn(`[Firestore Fallback] Write permission denied for setDoc ${colName}/${docId}. Bypassing to local storage.`);
@@ -174,15 +259,27 @@ async function setDoc(docRef: any, data: any, options?: any): Promise<void> {
   }
 }
 
-async function addDoc(colRef: any, data: any): Promise<any> {
+export async function addDoc(colRef: any, data: any): Promise<any> {
   const colName = getCollectionName(colRef);
+  const activeTenantId = getTenantId();
+  const dataWithTenant = {
+    ...data,
+    tenantId: data.tenantId || activeTenantId
+  };
+
+  // Enforce Tenant Check on Create
+  const isGlobalCol = ['tenants', 'licenses', 'login_attempts', 'audit_logs', 'trash_bin'].includes(colName);
+  if (!isGlobalCol && activeTenantId !== 'mentecare_platform' && dataWithTenant.tenantId && dataWithTenant.tenantId !== activeTenantId) {
+    throw new Error(`[Tenant Isolation] Permissão negada para adicionar documento em outro tenant.`);
+  }
+
   const newId = 'id_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
   const list = getLocalData<any>(colName);
-  const newItem = { ...data, id: newId };
+  const newItem = { ...dataWithTenant, id: newId };
   list.push(newItem);
   setLocalData(colName, list);
   try {
-    const docRef = await firebaseAddDoc(colRef, data);
+    const docRef = await firebaseAddDoc(colRef, dataWithTenant);
     const updatedList = getLocalData<any>(colName);
     const index = updatedList.findIndex(item => item.id === newId);
     if (index !== -1) {
@@ -199,8 +296,30 @@ async function addDoc(colRef: any, data: any): Promise<any> {
   }
 }
 
-async function updateDoc(docRef: any, data: any): Promise<void> {
+export async function updateDoc(docRef: any, data: any): Promise<void> {
   const { colName, docId } = getDocDetails(docRef);
+  const activeTenantId = getTenantId();
+
+  // Enforce Tenant Check on Update
+  const isGlobalCol = ['tenants', 'licenses', 'login_attempts', 'audit_logs', 'trash_bin'].includes(colName);
+  if (!isGlobalCol && activeTenantId !== 'mentecare_platform') {
+    try {
+      const snap = await firebaseGetDoc(docRef);
+      if (snap.exists()) {
+        const docData: any = snap.data() || {};
+        if (docData.tenantId && docData.tenantId !== activeTenantId) {
+          throw new Error(`[Tenant Isolation] Permissão negada para atualizar documento de outro tenant.`);
+        }
+      }
+    } catch (e: any) {
+      if (isPermissionDenied(e)) {
+        console.warn(`[Firestore Fallback] Bypass check updating local document ${colName}/${docId}`);
+      } else {
+        throw e;
+      }
+    }
+  }
+
   if (colName) {
     const list = getLocalData<any>(colName);
     const index = list.findIndex(item => item.id === docId);
@@ -220,8 +339,30 @@ async function updateDoc(docRef: any, data: any): Promise<void> {
   }
 }
 
-async function deleteDoc(docRef: any): Promise<void> {
+export async function deleteDoc(docRef: any): Promise<void> {
   const { colName, docId } = getDocDetails(docRef);
+  const activeTenantId = getTenantId();
+
+  // Enforce Tenant Check on Delete
+  const isGlobalCol = ['tenants', 'licenses', 'login_attempts', 'audit_logs', 'trash_bin'].includes(colName);
+  if (!isGlobalCol && activeTenantId !== 'mentecare_platform') {
+    try {
+      const snap = await firebaseGetDoc(docRef);
+      if (snap.exists()) {
+        const docData: any = snap.data() || {};
+        if (docData.tenantId && docData.tenantId !== activeTenantId) {
+          throw new Error(`[Tenant Isolation] Permissão negada para excluir documento de outro tenant.`);
+        }
+      }
+    } catch (e: any) {
+      if (isPermissionDenied(e)) {
+        console.warn(`[Firestore Fallback] Bypass check deleting local document ${colName}/${docId}`);
+      } else {
+        throw e;
+      }
+    }
+  }
+
   if (colName) {
     const list = getLocalData<any>(colName);
     const filtered = list.filter(item => item.id !== docId);
@@ -237,7 +378,7 @@ async function deleteDoc(docRef: any): Promise<void> {
     throw err;
   }
 }
-import { Service, BlogPost, FAQ, Testimonial, Patient, PatientRecord, PatientDocument, Appointment, FinancialTransaction, Receipt, AuditLog, DocumentVersion, TrashItem, PixConfig } from '../types';
+import { Service, BlogPost, FAQ, Testimonial, Patient, PatientRecord, PatientDocument, Appointment, FinancialTransaction, Receipt, AuditLog, DocumentVersion, TrashItem, PixConfig, License, Tenant, SaaSPlanId } from '../types';
 import { PSYCHOLOGIST_INFO, SERVICES, PROCESS_STEPS, FAQS, TESTIMONIALS, BLOG_POSTS } from '../data';
 
 export enum OperationType {
@@ -357,6 +498,10 @@ export interface SiteContent {
     heroImageUrl?: string;
     aboutImageUrl?: string;
     logoUrl?: string;
+    faviconUrl?: string;
+    tagline?: string;
+    biography?: string;
+    clinicName?: string;
   };
   services: Service[];
   process_steps: typeof PROCESS_STEPS;
@@ -367,6 +512,17 @@ export interface SiteContent {
     backgroundColor: string;
     backgroundImageUrl?: string;
     logoUrl?: string;
+    faviconUrl?: string;
+    fontColor?: string;
+    buttonColor?: string;
+    linkColor?: string;
+    titleColor?: string;
+    borderColor?: string;
+    fontFamily?: string;
+    fontWeight?: string;
+    fontSize?: string;
+    lineHeight?: string;
+    letterSpacing?: string;
   };
   seo: {
     title: string;
@@ -375,6 +531,27 @@ export interface SiteContent {
     shareImageUrl?: string;
   };
   agenda_config?: AgendaConfig;
+  sections?: {
+    id: string;
+    type: string;
+    title: string;
+    visible: boolean;
+    order: number;
+    customContent?: string;
+  }[];
+  cms_content?: {
+    hero?: Record<string, string>;
+    about?: Record<string, string>;
+    benefits?: Record<string, string>;
+    services?: Record<string, string>;
+    howitworks?: Record<string, string>;
+    faqs?: Record<string, string>;
+    testimonials?: Record<string, string>;
+    contact?: Record<string, string>;
+    footer?: Record<string, string>;
+    policies?: Record<string, string>;
+    system_messages?: Record<string, string>;
+  };
 }
 
 // Default values for initialization
@@ -407,14 +584,121 @@ const DEFAULT_CONTENT: SiteContent = {
     primaryColor: "#5c6f68", // sage-600
     backgroundColor: "#fcfaf7", // sand-50
     backgroundImageUrl: "",
-    logoUrl: ""
+    logoUrl: "",
+    fontColor: "#1c1a16",
+    buttonColor: "#b36f64",
+    linkColor: "#9c584e",
+    titleColor: "#1c1a16",
+    borderColor: "#e7e3d7",
+    fontFamily: "Poppins",
+    fontWeight: "400",
+    fontSize: "16px",
+    lineHeight: "1.5",
+    letterSpacing: "normal"
   },
   seo: {
     title: "Erica Costa | Psicologia Clínica & Orientação de Carreira",
     description: "Espaço seguro de acolhimento e escuta qualificada. Psicoterapia online para jovens e adultos. Orientação de carreira e plantão de acolhimento emocional.",
     keywords: "psicóloga, terapia online, psicoterapia, ansiedade, autoconhecimento, orientação de carreira, Erica Costa, ceára"
   },
-  agenda_config: DEFAULT_AGENDA
+  agenda_config: DEFAULT_AGENDA,
+  sections: [
+    { id: "hero", type: "hero", title: "Hero / Banner Principal", visible: true, order: 0 },
+    { id: "about", type: "about", title: "Sobre Mim", visible: true, order: 1 },
+    { id: "benefits", type: "benefits", title: "Diferenciais Clínicos", visible: true, order: 2 },
+    { id: "services", type: "services", title: "Serviços Oferecidos", visible: true, order: 3 },
+    { id: "howitworks", type: "howitworks", title: "Como Funciona o Processo", visible: true, order: 4 },
+    { id: "faqs", type: "faqs", title: "Perguntas Frequentes (FAQ)", visible: true, order: 5 },
+    { id: "testimonials", type: "testimonials", title: "Depoimentos de Pacientes", visible: true, order: 6 },
+    { id: "booking", type: "booking", title: "Agenda de Consultas", visible: true, order: 7 },
+    { id: "contact", type: "contact", title: "Formulário de Contato", visible: true, order: 8 }
+  ],
+  cms_content: {
+    hero: {
+      tag: "Espaço Acolhedor & Ético",
+      title: "Psicóloga Erica Costa",
+      subtitle: "Um espaço seguro para acolher sua história, fortalecer sua saúde emocional e promover seu bem-estar.",
+      body: "Atendimento psicológico online com acolhimento, ética, escuta qualificada e respeito à individualidade de cada pessoa.",
+      button_primary: "Agende sua primeira consulta",
+      button_secondary: "Falar pelo WhatsApp",
+      stat1_title: "100%",
+      stat1_desc: "Sigiloso e Ético",
+      stat2_title: "TCC",
+      stat2_desc: "Prática Científica",
+      stat3_title: "Online",
+      stat3_desc: "Para todo o Brasil"
+    },
+    about: {
+      tag: "SOBRE MIM",
+      title: "Caminhando ao seu lado em busca de equilíbrio emocional",
+      subtitle: "Caminhando ao seu lado em busca de equilíbrio emocional",
+      bioLong: "Olá! Sou Erica Costa, psicóloga. Meu compromisso é oferecer um atendimento acolhedor, ético e humanizado, proporcionando um espaço seguro para que você possa explorar suas emoções, compreender seus desafios e trilhar um caminho de autoconhecimento e crescimento pessoal. Acredito na psicologia como uma ferramenta de transformação e acolhimento. Vamos caminhar juntos?",
+      valuesTitle: "VALORES E PILARES",
+      valuesSubtitle: "Como conduzo meu trabalho clínico",
+      valuesDescription: "Diretrizes indispensáveis para garantir que você tenha um atendimento humano, técnico e seguro."
+    },
+    benefits: {
+      tag: "DIFERENCIAIS CLÍNICOS",
+      title: "Por que escolher a psicoterapia online?",
+      subtitle: "Um processo terapêutico pensado minuciosamente para oferecer o máximo em suporte emocional, flexibilidade, bem-estar e rigor técnico.",
+      button_label: "Iniciar Agendamento"
+    },
+    services: {
+      tag: "CUIDADO ESPECIALIZADO",
+      title: "Como posso te ajudar?",
+      subtitle: "Conheça as modalidades de atendimento disponíveis. Escolha a que melhor se adapta ao seu momento de vida.",
+      button_label: "Agendar Consulta"
+    },
+    howitworks: {
+      tag: "PROCESSO CLÍNICO",
+      title: "Como funciona o tratamento?",
+      subtitle: "O caminho da psicoterapia é estruturado passo a passo para garantir a sua evolução constante, segura e transparente."
+    },
+    faqs: {
+      tag: "DÚVIDAS FREQUENTES",
+      title: "Tem alguma dúvida?",
+      subtitle: "Aqui estão as respostas para as principais dúvidas sobre o atendimento psicológico. Se precisar de mais informações, entre em contato."
+    },
+    testimonials: {
+      tag: "DEPOIMENTOS",
+      title: "O que dizem os pacientes",
+      subtitle: "Acompanhe alguns relatos reais de pessoas que passaram pelo processo de acolhimento e transformação."
+    },
+    contact: {
+      tag: "CONTATO",
+      title: "Deseja agendar ou tirar dúvidas?",
+      subtitle: "Preencha o formulário abaixo e retornarei o mais breve possível para conversarmos.",
+      form_name: "Seu Nome Completo",
+      form_email: "Seu melhor E-mail",
+      form_phone: "Seu número de WhatsApp",
+      form_message: "Como posso te ajudar? (Fale brevemente sobre o que te traz aqui)",
+      form_submit: "Enviar Mensagem por E-mail"
+    },
+    footer: {
+      copyright: "Todos os direitos reservados.",
+      crp_warning: "Conselho Federal de Psicologia — Psicoterapia Online ética, sigilosa e acolhedora."
+    },
+    policies: {
+      privacy_title: "Política de Privacidade",
+      privacy_content: "<p>A sua privacidade é extremamente importante para nós. Coletamos e tratamos seus dados pessoais de forma ética e segura para prestar os serviços psicológicos de forma transparente, atendendo às regulamentações vigentes de sigilo do Conselho Federal de Psicologia e à LGPD.</p>",
+      terms_title: "Termos de Uso",
+      terms_content: "<p>Ao navegar pelo site e utilizar nossos agendamentos, você concorda com o cumprimento das normas descritas nestes Termos, comprometendo-se com a veracidade dos dados inseridos e a pontualidade nos horários agendados.</p>"
+    },
+    system_messages: {
+      success_appointment: "Agendamento realizado com sucesso! Aguardando confirmação do pagamento.",
+      error_appointment: "Falha ao realizar o agendamento de consulta. Por favor, tente novamente ou fale conosco no WhatsApp.",
+      success_contact: "Sua mensagem foi registrada com sucesso! Retornaremos o contato em breve.",
+      error_contact: "Erro ao registrar mensagem. Verifique sua conexão e tente novamente.",
+      success_pix: "Pagamento PIX de R$ {amount} confirmado com sucesso! Seu horário foi reservado.",
+      pending_pix: "Pix gerado! Faça a leitura do QR Code ou copie o código Copia e Cola para realizar o pagamento.",
+      success_finance: "Lançamento financeiro registrado com sucesso!",
+      error_finance: "Não foi possível registrar a transação financeira.",
+      success_record: "Informações do prontuário gravadas com sucesso.",
+      error_record: "Erro ao gravar informações clínicas no prontuário do paciente.",
+      error_admin: "Acesso negado. Credenciais administrativas inválidas.",
+      success_admin: "Configurações globais salvas com sucesso!"
+    }
+  }
 };
 
 // Detect Client OS, Browser, IP
@@ -423,7 +707,7 @@ export async function detectClientInfo() {
   try {
     const res = await fetch('https://api.ipify.org?format=json');
     if (res.ok) {
-      const data = await res.json();
+      const data = await safeJson(res);
       ip = data.ip;
     }
   } catch (e) {
@@ -464,6 +748,7 @@ export async function logAuditAction(
     const id = doc(colRef).id;
     const email = auth.currentUser?.email || 'Sistema';
     const userId = auth.currentUser?.uid || 'system';
+    const activeTenantId = getTenantId();
     
     const payload: AuditLog = {
       id,
@@ -474,7 +759,8 @@ export async function logAuditAction(
       timestamp: Date.now(),
       ip: info.ip,
       browser: info.browser,
-      os: info.os
+      os: info.os,
+      tenantId: activeTenantId
     };
 
     await setDoc(doc(db, 'audit_logs', id), payload);
@@ -483,17 +769,109 @@ export async function logAuditAction(
   }
 }
 
-const CONTENT_DOC_REF = doc(db, 'site_content', 'main');
+export function getTenantId(): string {
+  if (typeof window === 'undefined') {
+    return 'mentecare_platform';
+  }
+
+  // 1. If we are impersonating a clinic, we must return that clinic's tenant ID instead of 'mentecare_platform'
+  if (sessionStorage.getItem('mente_care_impersonating') === 'true') {
+    const saved = localStorage.getItem('active_tenant_id');
+    if (saved && saved !== 'mentecare_platform') {
+      return saved;
+    }
+  }
+
+  // 2. Check path for clinic context: /clinica/:id or /tenant/:id
+  const path = window.location.pathname;
+  const clinicaMatch = path.match(/^\/clinica\/([a-zA-Z0-9_-]+)/);
+  if (clinicaMatch) {
+    return clinicaMatch[1];
+  }
+
+  const tenantMatch = path.match(/^\/tenant\/([a-zA-Z0-9_-]+)/);
+  if (tenantMatch) {
+    return tenantMatch[1];
+  }
+
+  // 3. Check subdomain (excluding localhost or common platform hostnames)
+  const hostname = window.location.hostname;
+  const parts = hostname.split('.');
+  if (parts.length > 2 && parts[0] !== 'www' && !hostname.includes('localhost') && !hostname.includes('aistudio') && !hostname.includes('run.app')) {
+    return parts[0];
+  }
+
+  // 4. Check query parameters
+  const urlParams = new URLSearchParams(window.location.search);
+  const queryTenant = urlParams.get('tenant') || urlParams.get('tenantId');
+  if (queryTenant) {
+    const finalTenant = queryTenant === 'main' ? 'erica' : queryTenant;
+    localStorage.setItem('active_tenant_id', finalTenant);
+    return finalTenant;
+  }
+
+  // 5. If there is an authenticated user, return their active tenant ID
+  if (auth && auth.currentUser) {
+    const emailLower = (auth.currentUser.email || '').toLowerCase().trim();
+    if (emailLower === 'dmenossolucao@gmail.com' || emailLower === 'd-briciod2@hotmail.com') {
+      return 'mentecare_platform';
+    }
+
+    const saved = localStorage.getItem('active_tenant_id');
+    if (saved) {
+      if (saved === 'main') {
+        localStorage.setItem('active_tenant_id', 'mentecare_platform');
+        return 'mentecare_platform';
+      }
+      return saved;
+    }
+  }
+
+  return 'mentecare_platform';
+}
 
 export const contentService = {
   // Fetch overall site content
-  async getSiteContent(): Promise<SiteContent> {
+  async getSiteContent(isPreview: boolean = false): Promise<SiteContent> {
     try {
-      const snap = await getDoc(CONTENT_DOC_REF);
+      const tenantId = getTenantId();
+      const docName = isPreview ? `${tenantId}_draft` : `${tenantId}_published`;
+      let docRef = doc(db, 'site_content', docName);
+      let snap = await getDoc(docRef);
+      
+      if (!snap.exists()) {
+        if (isPreview) {
+          docRef = doc(db, 'site_content', `${tenantId}_published`);
+          snap = await getDoc(docRef);
+        }
+        if (!snap.exists() && (tenantId === 'erica' || tenantId === 'main')) {
+          docRef = doc(db, 'site_content', isPreview ? 'main_draft' : 'main_published');
+          snap = await getDoc(docRef);
+          if (!snap.exists()) {
+            docRef = doc(db, 'site_content', 'main');
+            snap = await getDoc(docRef);
+          }
+        }
+      }
+
+      // Check for registered tenant info if this is a custom tenant
+      let registeredName = '';
+      let registeredEmail = '';
+      if (tenantId !== 'mentecare_platform' && tenantId !== 'main' && tenantId !== 'erica') {
+        try {
+          const tenantSnap = await getDoc(doc(db, 'tenants', tenantId));
+          if (tenantSnap.exists()) {
+            registeredName = tenantSnap.data()?.name || '';
+            registeredEmail = tenantSnap.data()?.ownerEmail || '';
+          }
+        } catch (e) {
+          // Ignore lookup errors
+        }
+      }
+
       if (snap.exists()) {
         const data = snap.data() as SiteContent;
-        // Merge missing fields to handle schema updates gracefully
-        return {
+        const mergedContent: SiteContent = {
           ...DEFAULT_CONTENT,
           ...data,
           psychologist_info: {
@@ -511,12 +889,70 @@ export const contentService = {
           agenda_config: {
             ...DEFAULT_AGENDA,
             ...(data.agenda_config || {})
+          },
+          sections: data.sections || DEFAULT_CONTENT.sections,
+          cms_content: {
+            ...DEFAULT_CONTENT.cms_content,
+            ...(data.cms_content || {})
           }
         };
+
+        // If registeredName exists and content still contains default name fallback
+        if (registeredName) {
+          if (!data.psychologist_info?.name || data.psychologist_info.name === "Psicóloga Erica Costa") {
+            mergedContent.psychologist_info.name = registeredName;
+            mergedContent.psychologist_info.whatsappMessage = `Olá, ${registeredName}! Gostaria de agendar uma consulta.`;
+          }
+          if (!data.cms_content?.hero?.title || data.cms_content.hero.title === "Psicóloga Erica Costa") {
+            mergedContent.cms_content.hero.title = registeredName;
+          }
+          if (!data.seo?.title || data.seo.title.includes("Erica Costa")) {
+            mergedContent.seo.title = `${registeredName} | Psicologia Clínica`;
+          }
+        }
+
+        return mergedContent;
       } else {
-        // Initialize with default values on first run
-        await setDoc(CONTENT_DOC_REF, DEFAULT_CONTENT);
-        return DEFAULT_CONTENT;
+        const defaultDocRef = doc(db, 'site_content', `${tenantId}_published`);
+        const draftDocRef = doc(db, 'site_content', `${tenantId}_draft`);
+        
+        const tenantDefault: SiteContent = {
+          ...DEFAULT_CONTENT,
+          ...(registeredName ? {
+            psychologist_info: {
+              ...DEFAULT_CONTENT.psychologist_info,
+              name: registeredName,
+              email: registeredEmail || DEFAULT_CONTENT.psychologist_info.email,
+              whatsappMessage: `Olá, ${registeredName}! Gostaria de agendar uma consulta.`,
+              footerText: `Psicoterapia online ética, sigilosa e acolhedora. Consultório: ${registeredName}`
+            },
+            cms_content: {
+              ...DEFAULT_CONTENT.cms_content,
+              hero: {
+                ...DEFAULT_CONTENT.cms_content.hero,
+                title: registeredName,
+                subtitle: `Um espaço seguro no consultório ${registeredName} para acolher sua história, fortalecer sua saúde emocional e promover seu bem-estar.`
+              },
+              about: {
+                ...DEFAULT_CONTENT.cms_content.about,
+                title: `Conheça ${registeredName}`,
+                bioLong: `Olá! Seja bem-vindo(a) ao atendimento com ${registeredName}. Meu compromisso é oferecer um atendimento acolhedor, ético e humanizado, proporcionando um espaço seguro para que você possa explorar suas emoções.`
+              }
+            },
+            seo: {
+              title: `${registeredName} | Psicologia Clínica`,
+              description: `Espaço seguro de acolhimento e escuta qualificada com ${registeredName}. Psicoterapia online e presencial.`,
+              keywords: `psicóloga, terapia online, psicoterapia, ${registeredName}`
+            }
+          } : {})
+        };
+
+        await setDoc(defaultDocRef, tenantDefault);
+        await setDoc(draftDocRef, tenantDefault);
+        if (tenantId === 'erica') {
+          await setDoc(doc(db, 'site_content', 'erica_published'), tenantDefault);
+        }
+        return tenantDefault;
       }
     } catch (err) {
       console.error("Error fetching site content from Firestore:", err);
@@ -524,33 +960,51 @@ export const contentService = {
     }
   },
 
-  // Save overall site content
+  // Save overall site content (updates the draft/rascunho!)
   async updateSiteContent(content: Partial<SiteContent>): Promise<void> {
     try {
-      const current = await this.getSiteContent();
-      
-      // Módulo 4: Versionamento de Configurações antes de atualizar
-      await this.createVersion('site_content', 'main', current, `Alterações: ${Object.keys(content).join(', ')}`);
+      const tenantId = getTenantId();
+      const currentDraft = await this.getSiteContent(true);
       
       const updated = {
-        ...current,
+        ...currentDraft,
         ...content,
         psychologist_info: {
-          ...current.psychologist_info,
+          ...currentDraft.psychologist_info,
           ...(content.psychologist_info || {})
         },
         appearance: {
-          ...current.appearance,
+          ...currentDraft.appearance,
           ...(content.appearance || {})
         },
         seo: {
-          ...current.seo,
+          ...currentDraft.seo,
           ...(content.seo || {})
+        },
+        sections: content.sections || currentDraft.sections || DEFAULT_CONTENT.sections,
+        cms_content: {
+          ...DEFAULT_CONTENT.cms_content,
+          ...currentDraft.cms_content,
+          ...(content.cms_content || {})
         }
       };
-      await setDoc(CONTENT_DOC_REF, updated);
+
+      if (content.cms_content) {
+        updated.cms_content = {
+          ...DEFAULT_CONTENT.cms_content,
+          ...currentDraft.cms_content
+        };
+        for (const [key, value] of Object.entries(content.cms_content)) {
+          updated.cms_content[key] = {
+            ...(currentDraft.cms_content?.[key] || {}),
+            ...value
+          };
+        }
+      }
+
+      const draftDocRef = doc(db, 'site_content', `${tenantId}_draft`);
+      await setDoc(draftDocRef, updated);
       
-      // Dynamic updates to document title and meta description
       if (updated.seo.title) {
         document.title = updated.seo.title;
       }
@@ -559,10 +1013,53 @@ export const contentService = {
         metaDesc.setAttribute('content', updated.seo.description);
       }
 
-      // Módulo 6: Auditoria Completa
-      await logAuditAction('UPDATE', `Configurações globais de site_content atualizadas.`);
+      await logAuditAction('UPDATE', `Rascunho de site_content atualizado.`);
     } catch (err) {
-      console.error("Error updating site content in Firestore:", err);
+      console.error("Error updating site content draft in Firestore:", err);
+      throw err;
+    }
+  },
+
+  // Publish dynamic content: saves draft to published, creates historical version
+  async publishDraftContent(changeDescription: string): Promise<void> {
+    try {
+      const tenantId = getTenantId();
+      const draftContent = await this.getSiteContent(true);
+      const currentPublished = await this.getSiteContent(false);
+
+      await this.createVersion(
+        'site_content', 
+        `${tenantId}_published`, 
+        currentPublished, 
+        changeDescription || `Publicação de alterações: ${new Date().toLocaleString('pt-BR')}`
+      );
+
+      const publishedDocRef = doc(db, 'site_content', `${tenantId}_published`);
+      await setDoc(publishedDocRef, draftContent);
+
+      if (tenantId === 'erica') {
+        await setDoc(doc(db, 'site_content', 'erica'), draftContent);
+      }
+
+      await logAuditAction('UPDATE', `Rascunho publicado com sucesso para a versão de produção. Motivo: ${changeDescription}`);
+    } catch (err) {
+      console.error("Error publishing site content:", err);
+      throw err;
+    }
+  },
+
+  // Cancel draft changes: resets draft back to match published content
+  async cancelDraftChanges(): Promise<void> {
+    try {
+      const tenantId = getTenantId();
+      const publishedContent = await this.getSiteContent(false);
+      
+      const draftDocRef = doc(db, 'site_content', `${tenantId}_draft`);
+      await setDoc(draftDocRef, publishedContent);
+
+      await logAuditAction('UPDATE', `Alterações de rascunho canceladas, restaurado a partir da produção.`);
+    } catch (err) {
+      console.error("Error cancelling draft changes:", err);
       throw err;
     }
   },
@@ -635,19 +1132,13 @@ export const contentService = {
   },
 
   // Delete a blog post
-  async deleteBlogPost(id: string): Promise<void> {
+  async deleteBlogPost(id: string, deleteReason?: string): Promise<void> {
     try {
       const docRef = doc(db, 'blog_posts', id);
       const docSnap = await getDoc(docRef);
       if (docSnap.exists()) {
         const data = docSnap.data();
-        if (data && data.imageUrl) {
-          try {
-            await this.deleteImage(data.imageUrl);
-          } catch (err) {
-            console.error("Error deleting blog post image from storage:", err);
-          }
-        }
+        await this.moveToTrash('blog_posts', id, data, `Artigo: ${data.title || 'Sem título'}`, deleteReason || 'Exclusão de post de blog');
       }
       await deleteDoc(docRef);
     } catch (err) {
@@ -808,7 +1299,7 @@ export const contentService = {
     date: string; // YYYY-MM-DD
     timeSlot: string; // HH:MM
     amount: number;
-    paymentMethod: 'pix' | 'credit_card';
+    paymentMethod: 'pix' | 'credit_card' | 'debit_card';
   }): Promise<any> {
     const response = await fetch('/api/appointments/book', {
       method: 'POST',
@@ -816,10 +1307,10 @@ export const contentService = {
       body: JSON.stringify(apptData),
     });
     if (!response.ok) {
-      const errData = await response.json();
-      throw new Error(errData.error || 'Erro ao realizar agendamento.');
+      const errData = await safeJson(response);
+      throw new Error((errData && errData.error) || 'Erro ao realizar agendamento.');
     }
-    return response.json();
+    return safeJson(response);
   },
 
   // Confirm simulated payment (triggers webhook status change)
@@ -830,10 +1321,10 @@ export const contentService = {
       body: JSON.stringify({ appointmentId, paymentType }),
     });
     if (!response.ok) {
-      const errData = await response.json();
-      throw new Error(errData.error || 'Erro ao simular pagamento.');
+      const errData = await safeJson(response);
+      throw new Error((errData && errData.error) || 'Erro ao simular pagamento.');
     }
-    return response.json();
+    return safeJson(response);
   },
 
   // Retrieve details for a single appointment
@@ -842,7 +1333,7 @@ export const contentService = {
     if (!response.ok) {
       throw new Error('Agendamento não encontrado.');
     }
-    return response.json();
+    return safeJson(response);
   },
 
   // Update appointment status (Admin)
@@ -855,7 +1346,7 @@ export const contentService = {
     if (!response.ok) {
       throw new Error('Erro ao atualizar status do agendamento.');
     }
-    return response.json();
+    return safeJson(response);
   },
 
   // Blocked slots for administrative agenda exceptions
@@ -864,7 +1355,7 @@ export const contentService = {
     if (!response.ok) {
       throw new Error('Erro ao buscar horários bloqueados.');
     }
-    return response.json();
+    return safeJson(response);
   },
 
   // Block a slot (Admin)
@@ -877,7 +1368,7 @@ export const contentService = {
     if (!response.ok) {
       throw new Error('Erro ao bloquear horário.');
     }
-    return response.json();
+    return safeJson(response);
   },
 
   // Unblock a slot (Admin)
@@ -888,7 +1379,7 @@ export const contentService = {
     if (!response.ok) {
       throw new Error('Erro ao remover bloqueio.');
     }
-    return response.json();
+    return safeJson(response);
   },
 
   // === PATIENTS METHODS (ADMIN) ===
@@ -906,15 +1397,25 @@ export const contentService = {
 
   async createPatient(patient: Omit<Patient, 'id'>): Promise<Patient> {
     try {
+      const activeTenantId = getTenantId();
+      const license = await this.getActiveLicenseForTenant(activeTenantId);
+      if (license) {
+        const patients = await this.getPatients();
+        if (patients && patients.length >= license.maxPatients) {
+          throw new Error(`Limite de pacientes atingido! O seu plano atual (${license.plan}) permite no máximo ${license.maxPatients} pacientes.`);
+        }
+      }
+
       const colRef = collection(db, 'patients');
       const docRef = await addDoc(colRef, {
         ...patient,
         createdAt: Date.now()
       });
       return { ...patient, id: docRef.id, createdAt: Date.now() } as Patient;
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error creating patient:", err);
       handleFirestoreError(err, OperationType.CREATE, 'patients');
+      throw err;
     }
   },
 
@@ -1220,9 +1721,14 @@ export const contentService = {
     }
   },
 
-  async deleteAppointment(id: string): Promise<void> {
+  async deleteAppointment(id: string, deleteReason?: string): Promise<void> {
     try {
       const docRef = doc(db, 'appointments', id);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const item = snap.data() as Appointment;
+        await this.moveToTrash('appointments', id, item, `Agendamento: ${item.serviceTitle || 'Consulta'} com ${item.patientName || 'Paciente'}`, deleteReason || 'Cancelamento de consulta');
+      }
       await deleteDoc(docRef);
     } catch (err) {
       console.error("Error deleting appointment:", err);
@@ -1269,9 +1775,14 @@ export const contentService = {
     }
   },
 
-  async deleteFinancialTransaction(id: string): Promise<void> {
+  async deleteFinancialTransaction(id: string, deleteReason?: string): Promise<void> {
     try {
       const docRef = doc(db, 'financial_transactions', id);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const item = snap.data() as FinancialTransaction;
+        await this.moveToTrash('financial_transactions', id, item, `Transação Financeira: ${item.notes || 'Lançamento'} (R$ ${item.amount})`, deleteReason || 'Exclusão de registro financeiro');
+      }
       await deleteDoc(docRef);
     } catch (err) {
       console.error("Error deleting financial transaction:", err);
@@ -1431,7 +1942,11 @@ export const contentService = {
   async getTrashItems(): Promise<TrashItem[]> {
     try {
       const snap = await getDocs(collection(db, 'trash_bin'));
-      const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as TrashItem));
+      let list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as TrashItem));
+      const activeTenantId = getTenantId();
+      if (activeTenantId !== 'mentecare_platform') {
+        list = list.filter(item => item.tenantId === activeTenantId);
+      }
       const limitTime = Date.now() - 7776000000; // 90 days
       return list.filter(item => item.deletedAt >= limitTime).sort((a, b) => b.deletedAt - a.deletedAt);
     } catch (err) {
@@ -1441,15 +1956,17 @@ export const contentService = {
   },
 
   async moveToTrash(
-    collectionName: TrashItem['originalCollection'],
+    collectionName: string,
     documentId: string,
     data: any,
-    title: string
+    title: string,
+    deleteReason?: string
   ): Promise<void> {
     try {
       const colRef = collection(db, 'trash_bin');
       const id = doc(colRef).id;
       const email = auth.currentUser?.email || 'Sistema';
+      const activeTenantId = getTenantId();
 
       const trashDoc: TrashItem = {
         id,
@@ -1458,11 +1975,14 @@ export const contentService = {
         title,
         deletedAt: Date.now(),
         deletedBy: email,
+        deleteReason: deleteReason || 'Solicitado pelo usuário',
+        restoreUntil: Date.now() + 7776000000, // 90 days
+        tenantId: activeTenantId,
         data
       };
 
       await setDoc(doc(db, 'trash_bin', id), trashDoc);
-      await logAuditAction('DELETE', `Item '${title}' movido para a Lixeira Inteligente.`);
+      await logAuditAction('DELETE', `Item '${title}' movido para a Lixeira Inteligente. Motivo: ${deleteReason || 'Não especificado'}`);
     } catch (err) {
       console.error("Error moving to trash:", err);
     }
@@ -1506,7 +2026,8 @@ export const contentService = {
   // === PIX CONFIGURATION ===
   async getPixConfig(): Promise<PixConfig | null> {
     try {
-      const docRef = doc(db, 'pix_config', 'default');
+      const activeTenantId = getTenantId();
+      const docRef = doc(db, 'pix_config', activeTenantId);
       const snap = await getDoc(docRef);
       if (snap.exists()) {
         return { id: snap.id, ...snap.data() } as PixConfig;
@@ -1514,17 +2035,17 @@ export const contentService = {
       return null;
     } catch (err) {
       console.error("Error fetching PIX configuration:", err);
-      handleFirestoreError(err, OperationType.GET, 'pix_config/default');
       return null;
     }
   },
 
   async savePixConfig(config: Omit<PixConfig, 'id' | 'updatedAt'>): Promise<PixConfig> {
     try {
-      const docRef = doc(db, 'pix_config', 'default');
+      const activeTenantId = getTenantId();
+      const docRef = doc(db, 'pix_config', activeTenantId);
       const payload = {
         ...config,
-        id: 'default',
+        id: activeTenantId,
         updatedAt: Date.now()
       };
       await setDoc(docRef, payload);
@@ -1532,7 +2053,325 @@ export const contentService = {
       return payload as PixConfig;
     } catch (err) {
       console.error("Error saving PIX configuration:", err);
-      handleFirestoreError(err, OperationType.WRITE, 'pix_config/default');
+      throw err;
+    }
+  },
+
+  // === SAAS MULTI-TENANCY & LICENSING ===
+  async getTenants(): Promise<Tenant[]> {
+    try {
+      const colRef = collection(db, 'tenants');
+      const snap = await getDocs(colRef);
+      let list = snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as Tenant));
+      if (list.length === 0) {
+        // Seed some default tenants for beautiful multi-tenant demo
+        const defaultTenants: Tenant[] = [
+          {
+            id: 'erica',
+            name: 'Dra. Érica Costa',
+            subdomain: 'ericacosta',
+            createdAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
+            ownerEmail: 'ericacostapsicologa7@gmail.com',
+            status: 'Ativo'
+          },
+          {
+            id: 'dr_silva',
+            name: 'Dr. Arthur Silva',
+            subdomain: 'arthursilva',
+            createdAt: Date.now() - 15 * 24 * 60 * 60 * 1000,
+            ownerEmail: 'arthur.silva@gmail.com',
+            status: 'Ativo'
+          },
+          {
+            id: 'dra_lucia',
+            name: 'Dra. Lúcia Santos',
+            subdomain: 'luciasantos',
+            createdAt: Date.now() - 5 * 24 * 60 * 60 * 1000,
+            ownerEmail: 'lucia.santos@gmail.com',
+            status: 'Ativo'
+          }
+        ];
+        for (const t of defaultTenants) {
+          await setDoc(doc(db, 'tenants', t.id), t);
+        }
+        list = defaultTenants;
+      }
+      return list;
+    } catch (err) {
+      console.error("Error fetching tenants:", err);
+      return [];
+    }
+  },
+
+  async createTenant(tenant: Tenant): Promise<Tenant> {
+    try {
+      await setDoc(doc(db, 'tenants', tenant.id), tenant);
+      await logAuditAction('UPDATE', `Novo cliente/tenant criado: '${tenant.name}' (${tenant.id})`);
+      return tenant;
+    } catch (err) {
+      console.error("Error creating tenant:", err);
+      throw err;
+    }
+  },
+
+  async getLicenses(): Promise<License[]> {
+    try {
+      const colRef = collection(db, 'licenses');
+      const snap = await getDocs(colRef);
+      let list = snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as License));
+      if (list.length === 0) {
+        // Seed default licenses corresponding to our tenants
+        const defaultLicenses: License[] = [
+          {
+            id: 'lic_erica',
+            code: 'LIC-ERICA-ENTERPRISE-2026',
+            activatedAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
+            expiresAt: Date.now() + 335 * 24 * 60 * 60 * 1000, // 1 year
+            plan: 'Premium',
+            maxUsers: 10,
+            maxPatients: 500,
+            features: ['dashboard', 'agenda', 'pacientes', 'financeiro', 'blog', 'cms', 'designer', 'custom_domain'],
+            status: 'Ativa',
+            tenantId: 'erica'
+          },
+          {
+            id: 'lic_silva',
+            code: 'LIC-SILVA-PRO-9988',
+            activatedAt: Date.now() - 15 * 24 * 60 * 60 * 1000,
+            expiresAt: Date.now() + 165 * 24 * 60 * 60 * 1000, // 6 months
+            plan: 'Pro',
+            maxUsers: 3,
+            maxPatients: 150,
+            features: ['dashboard', 'agenda', 'pacientes', 'financeiro', 'blog'],
+            status: 'Ativa',
+            tenantId: 'dr_silva'
+          },
+          {
+            id: 'lic_lucia',
+            code: 'LIC-LUCIA-STARTER-1234',
+            activatedAt: Date.now() - 5 * 24 * 60 * 60 * 1000,
+            expiresAt: Date.now() + 25 * 24 * 60 * 60 * 1000, // 30 days trial
+            plan: 'Starter',
+            maxUsers: 1,
+            maxPatients: 30,
+            features: ['dashboard', 'agenda', 'pacientes'],
+            status: 'Ativa',
+            tenantId: 'dra_lucia'
+          }
+        ];
+        for (const lic of defaultLicenses) {
+          await setDoc(doc(db, 'licenses', lic.id), lic);
+        }
+        list = defaultLicenses;
+      }
+      return list;
+    } catch (err) {
+      console.error("Error fetching licenses:", err);
+      return [];
+    }
+  },
+
+  async getActiveLicenseForTenant(tenantId: string): Promise<License | null> {
+    try {
+      const licenses = await this.getLicenses();
+      const lic = licenses.find(l => l.tenantId === tenantId);
+      return lic || null;
+    } catch (err) {
+      console.error("Error getting active license for tenant:", err);
+      return null;
+    }
+  },
+
+  async createLicense(license: License): Promise<License> {
+    try {
+      await setDoc(doc(db, 'licenses', license.id), license);
+      await logAuditAction('UPDATE', `Nova licença criada para o tenant '${license.tenantId}': Código ${license.code}`);
+      return license;
+    } catch (err) {
+      console.error("Error creating license:", err);
+      throw err;
+    }
+  },
+
+  async activateLicense(code: string, tenantId: string): Promise<License> {
+    try {
+      const colRef = collection(db, 'licenses');
+      const snap = await getDocs(colRef);
+      const list = snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as License));
+      const existingLicense = list.find(lic => lic.code.trim().toUpperCase() === code.trim().toUpperCase());
+      
+      if (existingLicense) {
+        // Link to this tenant and set Active
+        const updatedLicense: License = {
+          ...existingLicense,
+          tenantId,
+          activatedAt: Date.now(),
+          status: 'Ativa'
+        };
+        await setDoc(doc(db, 'licenses', updatedLicense.id), updatedLicense);
+        await logAuditAction('UPDATE', `Licença '${code}' ativada para o tenant '${tenantId}'`);
+        return updatedLicense;
+      } else {
+        // Create a new custom license for this code
+        const newLicense: License = {
+          id: 'lic_' + Date.now(),
+          code: code.trim().toUpperCase(),
+          activatedAt: Date.now(),
+          expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000, // 1 year
+          plan: 'Premium',
+          maxUsers: 5,
+          maxPatients: 200,
+          features: ['dashboard', 'agenda', 'pacientes', 'financeiro', 'blog', 'cms', 'designer'],
+          status: 'Ativa',
+          tenantId
+        };
+        await setDoc(doc(db, 'licenses', newLicense.id), newLicense);
+        await logAuditAction('UPDATE', `Licença customizada '${code}' gerada e ativada para o tenant '${tenantId}'`);
+        return newLicense;
+      }
+    } catch (err) {
+      console.error("Error activating license:", err);
+      throw err;
+    }
+  },
+
+  async provisionNewTenant(
+    uid: string,
+    professionalName: string,
+    email: string,
+    phone: string,
+    clinicName: string,
+    plan: SaaSPlanId
+  ): Promise<string> {
+    try {
+      // 1. Generate clean tenantId
+      let cleanId = clinicName.trim().toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove accents
+        .replace(/[^a-z0-9]/g, '_')
+        .replace(/_+/g, '_');
+      
+      if (!cleanId || cleanId.length < 3) {
+        cleanId = 'tenant_' + Math.floor(1000 + Math.random() * 9000);
+      }
+
+      // 2. Check if tenant already exists
+      const tenantsCol = collection(db, 'tenants');
+      const tenantSnap = await getDocs(tenantsCol);
+      const existingIds = tenantSnap.docs.map(d => d.id);
+      
+      let finalTenantId = cleanId;
+      let counter = 1;
+      while (existingIds.includes(finalTenantId)) {
+        finalTenantId = `${cleanId}_${counter}`;
+        counter++;
+      }
+
+      // 3. Create Tenant
+      const tenantDoc: Tenant = {
+        id: finalTenantId,
+        name: clinicName,
+        subdomain: finalTenantId,
+        createdAt: Date.now(),
+        ownerEmail: email,
+        status: 'Ativo'
+      };
+      await setDoc(doc(db, 'tenants', finalTenantId), tenantDoc);
+
+      // 4. Calculate Limits
+      let maxUsers = 1;
+      let maxPatients = 50;
+      let features = ['dashboard', 'agenda', 'pacientes', 'financeiro'];
+
+      if (plan === 'Pro') {
+        maxUsers = 3;
+        maxPatients = 150;
+        features = ['dashboard', 'agenda', 'pacientes', 'financeiro', 'blog', 'cms'];
+      } else if (plan === 'Premium') {
+        maxUsers = 10;
+        maxPatients = 500;
+        features = ['dashboard', 'agenda', 'pacientes', 'financeiro', 'blog', 'cms', 'designer', 'custom_domain'];
+      } else if (plan === 'Enterprise') {
+        maxUsers = 99;
+        maxPatients = 9999;
+        features = ['dashboard', 'agenda', 'pacientes', 'financeiro', 'blog', 'cms', 'designer', 'custom_domain', 'multiempresa', 'ia_clinica'];
+      }
+
+      // 5. Create License
+      const licenseDoc: License = {
+        id: 'lic_' + finalTenantId + '_' + Date.now(),
+        code: `LIC-${finalTenantId.toUpperCase()}-${plan.toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`,
+        activatedAt: Date.now(),
+        expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000, // 30 days initial
+        plan: plan,
+        maxUsers,
+        maxPatients,
+        features,
+        status: 'Ativa',
+        tenantId: finalTenantId
+      };
+      await setDoc(doc(db, 'licenses', licenseDoc.id), licenseDoc);
+
+      // 6. Create Admin
+      const adminDoc = {
+        id: uid,
+        name: professionalName,
+        email: email,
+        phone: phone,
+        role: 'admin',
+        profile: 'clinico',
+        status: 'active',
+        tenantId: finalTenantId,
+        createdAt: Date.now()
+      };
+      await setDoc(doc(db, 'admins', uid), adminDoc);
+
+      // 7. Initial Site Content
+      const initialContent: SiteContent = {
+        ...DEFAULT_CONTENT,
+        psychologist_info: {
+          ...DEFAULT_CONTENT.psychologist_info,
+          name: professionalName,
+          email: email,
+          phone: phone,
+          whatsappMessage: `Olá, ${professionalName}! Gostaria de agendar uma consulta.`,
+          footerText: `Psicoterapia online ética, sigilosa e acolhedora. Regulamentada pelo CFP. Consultório: ${clinicName}`
+        },
+        seo: {
+          title: `${professionalName} | ${clinicName} - Psicologia`,
+          description: `Espaço seguro de acolhimento e escuta qualificada. Psicoterapia online para jovens e adultos no consultório ${clinicName}.`,
+          keywords: `psicóloga, terapia online, psicoterapia, ${professionalName}, ${clinicName}`
+        }
+      };
+      await setDoc(doc(db, 'site_content', `${finalTenantId}_published`), initialContent);
+      await setDoc(doc(db, 'site_content', `${finalTenantId}_draft`), initialContent);
+
+      // 8. Default PIX config
+      const pixPayload = {
+        id: finalTenantId,
+        keyType: 'email',
+        key: email,
+        receiverName: professionalName,
+        receiverCity: 'Fortaleza',
+        updatedAt: Date.now()
+      };
+      await setDoc(doc(db, 'pix_config', finalTenantId), pixPayload);
+
+      // 9. Log Audit action
+      await setDoc(doc(db, 'audit_logs', 'audit_' + Date.now()), {
+        userId: uid,
+        email: email,
+        action: 'UPDATE',
+        details: `Novo tenant provisionado com sucesso: '${clinicName}' (${finalTenantId}) no plano ${plan}.`,
+        timestamp: Date.now(),
+        ip: '127.0.0.1',
+        browser: 'SaaS Engine',
+        os: 'Linux',
+        tenantId: finalTenantId
+      });
+
+      return finalTenantId;
+    } catch (err) {
+      console.error("Failed to provision new tenant:", err);
       throw err;
     }
   }

@@ -3,7 +3,7 @@ import { useSiteContent } from '../context/SiteContext';
 
 export default function Footer() {
   const { siteContent } = useSiteContent();
-  const { name, bioShort, crp, instagramUrl, linkedinUrl, email, footerText } = siteContent.psychologist_info;
+  const { name = 'Clínica de Psicologia', bioShort = '', crp = '', instagramUrl = '', linkedinUrl = '', email = '', footerText = '' } = siteContent?.psychologist_info || {};
   const currentYear = new Date().getFullYear();
 
   const handleNavClick = (id: string) => {

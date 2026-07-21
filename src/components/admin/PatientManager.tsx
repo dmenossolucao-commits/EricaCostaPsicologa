@@ -34,6 +34,7 @@ import { DocumentManager } from './documents/DocumentManager';
 interface PatientManagerProps {
   onPatientsUpdated?: (updatedList: Patient[]) => void;
   onGlobalLoading?: (loading: boolean) => void;
+  initialSubTab?: 'cadastro' | 'prontuario' | 'documentos' | 'agenda' | 'financeiro' | 'historico';
 }
 
 const INITIAL_ADDRESS: PatientAddress = {
@@ -62,12 +63,14 @@ const INITIAL_FORM = {
   contatoEmergencia: '',
   nomeResponsavel: '',
   observacoes: '',
-  status: 'Ativo' as 'Ativo' | 'Inativo'
+  status: 'Ativo' as 'Ativo' | 'Inativo',
+  photoUrl: ''
 };
 
 export const PatientManager: React.FC<PatientManagerProps> = ({
   onPatientsUpdated,
-  onGlobalLoading
+  onGlobalLoading,
+  initialSubTab
 }) => {
   // State
   const [patients, setPatients] = useState<Patient[]>([]);
@@ -78,7 +81,7 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
   
   // Selected Patient & Active Tab
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
-  const [activeTab, setActiveTab] = useState<'cadastro' | 'prontuario' | 'documentos' | 'agenda' | 'financeiro' | 'historico'>('cadastro');
+  const [activeTab, setActiveTab] = useState<'cadastro' | 'prontuario' | 'documentos' | 'agenda' | 'financeiro' | 'historico'>(initialSubTab || 'cadastro');
   
   // Modals & Forms
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -127,7 +130,8 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
     setCepLoading(true);
     try {
       const res = await fetch(`https://viacep.com.br/ws/${cleanedCep}/json/`);
-      const data = await res.json();
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : {};
       if (!data.erro) {
         setForm(prev => ({
           ...prev,
@@ -318,7 +322,8 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
       contatoEmergencia: pt.contatoEmergencia || '',
       nomeResponsavel: pt.nomeResponsavel || '',
       observacoes: pt.observacoes || pt.notes || '',
-      status: pt.status || 'Ativo'
+      status: pt.status || 'Ativo',
+      photoUrl: pt.photoUrl || ''
     });
     
     setIsEditing(true);

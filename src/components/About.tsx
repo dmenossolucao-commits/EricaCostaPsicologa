@@ -5,7 +5,7 @@ import defaultAboutImage from '../assets/images/erica_costa_office_1783981376005
 
 export default function About() {
   const { siteContent } = useSiteContent();
-  const { bioLong, crp, aboutImageUrl } = siteContent.psychologist_info;
+  const { bioLong = '', crp = '', aboutImageUrl = '' } = siteContent?.psychologist_info || {};
 
   const values = [
     {
@@ -42,7 +42,7 @@ export default function About() {
             <div className="relative w-full max-w-sm md:max-w-md aspect-[4/5] rounded-[2.5rem] overflow-hidden shadow-2xl border border-sand-200/60 p-2.5 bg-white">
               <img
                 src={aboutImageUrl || defaultAboutImage}
-                alt="Retrato profissional de Erica Costa"
+                alt={`Retrato profissional de ${siteContent?.psychologist_info?.name || 'Psicólogo(a)'}`}
                 className="w-full h-full object-cover rounded-[2rem] object-[center_20%] transition-transform duration-500 hover:scale-[1.02] brightness-[1.01] contrast-[1.02] saturate-[1.01]"
                 referrerPolicy="no-referrer"
               />
@@ -56,15 +56,18 @@ export default function About() {
           {/* Biography Column */}
           <div className="lg:col-span-7 space-y-6">
             <div className="space-y-2">
-              <span className="text-xs font-semibold uppercase tracking-widest text-sage-600 font-mono">SOBRE MIM</span>
+              <span className="text-xs font-semibold uppercase tracking-widest text-sage-600 font-mono">
+                {siteContent.cms_content?.about?.tag || "SOBRE MIM"}
+              </span>
               <h2 className="text-3xl sm:text-4xl font-serif text-sand-950 font-bold">
-                Caminhando ao seu lado em busca de equilíbrio emocional
+                {siteContent.cms_content?.about?.title || "Caminhando ao seu lado em busca de equilíbrio emocional"}
               </h2>
             </div>
 
-            <p className="text-sand-800 text-base leading-relaxed whitespace-pre-line">
-              {bioLong}
-            </p>
+            <div 
+              className="text-sand-800 text-base leading-relaxed whitespace-pre-line prose prose-sm max-w-none"
+              dangerouslySetInnerHTML={{ __html: siteContent.cms_content?.about?.bioLong || bioLong }}
+            />
 
             {/* Quick credentials tag */}
             <div className="flex flex-wrap gap-3 pt-2">
@@ -87,12 +90,14 @@ export default function About() {
         {/* Values Block */}
         <div className="pt-16 border-t border-sand-100">
           <div className="text-center max-w-2xl mx-auto mb-12 space-y-2">
-            <span className="text-xs font-semibold uppercase tracking-widest text-sage-600 font-mono">VALORES E PILARES</span>
+            <span className="text-xs font-semibold uppercase tracking-widest text-sage-600 font-mono">
+              {siteContent.cms_content?.about?.valuesTitle || "VALORES E PILARES"}
+            </span>
             <h3 className="text-2xl sm:text-3xl font-serif text-sand-950 font-bold">
-              Como conduzo meu trabalho clínico
+              {siteContent.cms_content?.about?.valuesSubtitle || "Como conduzo meu trabalho clínico"}
             </h3>
             <p className="text-sm text-sand-700">
-              Diretrizes indispensáveis para garantir que você tenha um atendimento humano, técnico e seguro.
+              {siteContent.cms_content?.about?.valuesDescription || "Diretrizes indispensáveis para garantir que você tenha um atendimento humano, técnico e seguro."}
             </p>
           </div>
 

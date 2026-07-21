@@ -11,7 +11,7 @@ interface ContactProps {
 
 export default function Contact({ onMessageAdded }: ContactProps) {
   const { siteContent } = useSiteContent();
-  const { location, email, phoneFormatted, whatsappUrl, instagramUrl } = siteContent.psychologist_info;
+  const { location = '', email = '', phoneFormatted = '', whatsappUrl = '#', instagramUrl = '' } = siteContent?.psychologist_info || {};
 
   const [formData, setFormData] = useState({
     name: "",
@@ -287,7 +287,7 @@ export default function Contact({ onMessageAdded }: ContactProps) {
                   >
                     <CheckCircle2 size={18} className="text-emerald-500 shrink-0" />
                     <span>
-                      Mensagem enviada com sucesso! Erica retornará o contato o mais rápido possível através do seu e-mail ou WhatsApp.
+                      Mensagem enviada com sucesso! O profissional retornará o contato o mais rápido possível através do seu e-mail ou WhatsApp.
                     </span>
                   </motion.div>
                 )}

@@ -4,7 +4,7 @@ import { useSiteContent } from '../context/SiteContext';
 
 export default function WhatsAppButton() {
   const { siteContent } = useSiteContent();
-  const { whatsappUrl } = siteContent.psychologist_info;
+  const { whatsappUrl = '#' } = siteContent?.psychologist_info || {};
   return (
     <motion.a
       href={whatsappUrl}

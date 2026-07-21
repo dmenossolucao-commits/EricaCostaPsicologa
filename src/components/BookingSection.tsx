@@ -7,8 +7,8 @@ import { Service } from '../types';
 
 export default function BookingSection() {
   const { siteContent } = useSiteContent();
-  const { services } = siteContent;
-  const { name: psychologistName, phone: psychologistPhone } = siteContent.psychologist_info;
+  const services = siteContent?.services || [];
+  const { name: psychologistName = '', phone: psychologistPhone = '' } = siteContent?.psychologist_info || {};
 
   // Form & Selection State
   const [selectedService, setSelectedService] = useState<Service | null>(null);
@@ -18,7 +18,7 @@ export default function BookingSection() {
   const [patientName, setPatientName] = useState('');
   const [patientEmail, setPatientEmail] = useState('');
   const [patientPhone, setPatientPhone] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState<'pix' | 'credit_card'>('pix');
+  const [paymentMethod, setPaymentMethod] = useState<'pix' | 'credit_card' | 'debit_card'>('pix');
 
   // Booking Progress / Flow State
   const [currentStep, setCurrentStep] = useState<number>(1); // 1: Service/Date/Time, 2: Form/Payment, 3: Checkout, 4: Confirmed
@@ -174,7 +174,7 @@ export default function BookingSection() {
 
   const handleBook = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!patientName || !patientEmail || !patientPhone) {
+    if (!patientName || !patientPhone) {
       setError('Por favor, preencha todos os campos obrigatórios.');
       return;
     }
@@ -442,11 +442,10 @@ export default function BookingSection() {
 
                     <div>
                       <label className="block text-xs font-bold uppercase tracking-wider text-sand-800 mb-2 font-mono">
-                        E-mail *
+                        E-mail (Opcional)
                       </label>
                       <input
                         type="email"
-                        required
                         value={patientEmail}
                         onChange={(e) => setPatientEmail(e.target.value)}
                         placeholder="exemplo@email.com"
@@ -472,7 +471,7 @@ export default function BookingSection() {
                       <label className="block text-xs font-bold uppercase tracking-wider text-sand-800 mb-2 font-mono">
                         Forma de Pagamento
                       </label>
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-3 gap-2">
                         <button
                           type="button"
                           onClick={() => setPaymentMethod('pix')}
@@ -495,7 +494,19 @@ export default function BookingSection() {
                           }`}
                         >
                           <CreditCard size={14} />
-                          <span>Cartão</span>
+                          <span>Crédito</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPaymentMethod('debit_card')}
+                          className={`py-3 rounded-xl border font-semibold text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 transition-all ${
+                            paymentMethod === 'debit_card'
+                              ? 'bg-softblue-100/60 border-softblue-500 text-softblue-800 ring-1 ring-softblue-500 font-bold'
+                              : 'bg-white border-sand-200 text-sand-700 hover:border-sand-300'
+                          }`}
+                        >
+                          <CreditCard size={14} />
+                          <span>Débito</span>
                         </button>
                       </div>
                     </div>
@@ -564,11 +575,19 @@ export default function BookingSection() {
                         <span className="text-[10px] font-bold text-emerald-800 uppercase bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100 mb-3 font-mono">Pix Copia e Cola</span>
                         
                         <div className="bg-white p-3 rounded-xl border border-sand-200 max-w-[200px] shadow-sm mb-4">
-                          {/* Beautiful procedurally styled Pix QR Placeholder */}
-                          <div className="w-40 h-40 bg-sand-50 rounded-lg flex flex-col items-center justify-center border border-dashed border-sand-300 relative group">
-                            <QrCode size={56} className="text-sand-400 group-hover:scale-105 transition-transform" />
-                            <span className="text-[10px] text-sand-500 font-semibold mt-2">QR Code de Teste</span>
-                          </div>
+                          {bookingResult?.qrCode ? (
+                            <img
+                              src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(bookingResult.qrCode)}`}
+                              alt="QR Code PIX"
+                              referrerPolicy="no-referrer"
+                              className="w-40 h-40 object-contain rounded-lg"
+                            />
+                          ) : (
+                            <div className="w-40 h-40 bg-sand-50 rounded-lg flex flex-col items-center justify-center border border-dashed border-sand-300 relative group animate-pulse">
+                              <QrCode size={56} className="text-sand-400 group-hover:scale-105 transition-transform" />
+                              <span className="text-[10px] text-sand-500 font-semibold mt-2">Gerando QR Code...</span>
+                            </div>
+                          )}
                         </div>
 
                         <div className="w-full flex items-center gap-2 bg-white px-3 py-2 rounded-xl border border-sand-200">
@@ -600,13 +619,15 @@ export default function BookingSection() {
                     </div>
                   )}
 
-                  {/* CREDIT CARD DISPLAY */}
-                  {bookingResult?.paymentType === 'credit_card' && (
+                  {/* CREDIT CARD/DEBIT CARD DISPLAY */}
+                  {(bookingResult?.paymentType === 'credit_card' || bookingResult?.paymentType === 'debit_card') && (
                     <div className="p-5 border border-sand-200 rounded-2xl bg-sand-50 space-y-4">
                       <div className="text-center">
-                        <span className="text-[10px] font-bold text-softblue-800 uppercase bg-softblue-50 px-2 py-0.5 rounded border border-softblue-100 mb-3 font-mono">Cartão de Crédito</span>
+                        <span className="text-[10px] font-bold text-softblue-800 uppercase bg-softblue-50 px-2 py-0.5 rounded border border-softblue-100 mb-3 font-mono">
+                          {bookingResult?.paymentType === 'credit_card' ? 'Cartão de Crédito' : 'Cartão de Débito'}
+                        </span>
                         <p className="text-xs text-sand-700 mb-4">
-                          Clique no botão abaixo para preencher os dados do cartão de crédito no gateway seguro do Mercado Pago.
+                          Clique no botão abaixo para preencher os dados do cartão no gateway seguro do Mercado Pago.
                         </p>
                         
                         <a
@@ -743,7 +764,11 @@ export default function BookingSection() {
                 </div>
 
                 <div className="mt-8 pt-4 border-t border-sand-100 text-center text-[10px] text-sand-500">
-                  Um e-mail de confirmação também foi enviado para <span className="font-semibold">{bookingResult?.patientEmail}</span> e para a psicóloga.
+                  {bookingResult?.patientEmail ? (
+                    <>Um e-mail de confirmação também foi enviado para <span className="font-semibold">{bookingResult.patientEmail}</span> e para a psicóloga.</>
+                  ) : (
+                    <>A confirmação deste agendamento foi registrada no sistema e enviada para a psicóloga.</>
+                  )}
                 </div>
               </motion.div>
             )}

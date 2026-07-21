@@ -1,18 +1,18 @@
 import { Service, BlogPost, FAQ, Testimonial } from './types';
 
 export const PSYCHOLOGIST_INFO = {
-  name: "Erica Costa",
-  title: "Psicóloga",
-  crp: "", // Espaço preparado para o CRP. Deixe vazio por enquanto ou preencha quando emitido.
+  name: "Nome do Profissional",
+  title: "Psicólogo(a)",
+  crp: "00/00000", // Espaço preparado para o CRP. Deixe vazio por enquanto ou preencha quando emitido.
   bioShort: "Um espaço seguro para acolher sua história, fortalecer sua saúde emocional e promover seu bem-estar.",
-  bioLong: "Olá! Sou Erica Costa, psicóloga. Meu compromisso é oferecer um atendimento acolhedor, ético e humanizado, proporcionando um espaço seguro para que você possa explorar suas emoções, compreender seus desafios e trilhar um caminho de autoconhecimento e crescimento pessoal. Acredito na psicologia como uma ferramenta de transformação e acolhimento. Vamos caminhar juntos?",
+  bioLong: "Olá! Sou profissional da psicologia. Meu compromisso é oferecer um atendimento acolhedor, ético e humanizado, proporcionando um espaço seguro para que você possa explorar suas emoções, compreender seus desafios e trilhar um caminho de autoconhecimento e crescimento pessoal. Acredito na psicologia como uma ferramenta de transformação e acolhimento.",
   location: "Atendimento 100% Online (Para todo o Brasil e brasileiros no exterior)",
-  email: "contato@ericacostapsi.com.br",
-  phone: "+55 (85) 98647-1336",
-  phoneFormatted: "(85) 98647-1336",
-  whatsappUrl: "https://wa.me/5585986471336?text=Ol%C3%A1%2C%20Psic%C3%B3loga%20Erica%20Costa%21%20Gostaria%20de%20agendar%20uma%20consulta.",
+  email: "contato@exemplo.com.br",
+  phone: "+55 (11) 99999-9999",
+  phoneFormatted: "(11) 99999-9999",
+  whatsappUrl: "https://wa.me/5511999999999?text=Ol%C3%A1%2C%20gostaria%20de%20agendar%20uma%20consulta.",
   instagramUrl: "https://instagram.com/___________",
-  linkedinUrl: "https://linkedin.com/in/ericacosta-psi",
+  linkedinUrl: "https://linkedin.com/___________",
 };
 
 export const SERVICES: Service[] = [
@@ -154,21 +154,21 @@ export const TESTIMONIALS: Testimonial[] = [
     id: "t1",
     name: "Mariana Costa",
     role: "Paciente de Psicoterapia Individual (Online)",
-    text: "Iniciar a terapia com a Erica foi maravilhoso. Ela tem uma escuta extremamente acolhedora e atenta. Sinto que encontrei um espaço verdadeiramente seguro para falar sobre minhas fragilidades e ansiedades.",
+    text: "Iniciar a terapia com o profissional foi maravilhoso. Tem uma escuta extremamente acolhedora e atenta. Sinto que encontrei um espaço verdadeiramente seguro para falar sobre minhas fragilidades e ansiedades.",
     stars: 5
   },
   {
     id: "t2",
     name: "Rodrigo Almeida",
     role: "Paciente de Orientação de Carreira",
-    text: "Estava em um momento de profunda indecisão profissional. O processo estruturado com a Erica me ajudou a reconhecer minhas competências e a traçar um plano seguro e pé no chão de transição profissional.",
+    text: "Estava em um momento de profunda indecisão profissional. O processo estruturado me ajudou a reconhecer minhas competências e a traçar um plano seguro e pé no chão de transição profissional.",
     stars: 5
   },
   {
     id: "t3",
     name: "Gabriela Mendes",
     role: "Paciente de Psicoterapia (Online)",
-    text: "O atendimento online da Erica superou todas as minhas expectativas. Me sinto acolhida mesmo à distância, as sessões têm me ajudado muito a impor limites saudáveis nas minhas relações diárias.",
+    text: "O atendimento online superou todas as minhas expectativas. Me sinto acolhida mesmo à distância, as sessões têm me ajudado muito a impor limites saudáveis nas minhas relações diárias.",
     stars: 5
   }
 ];

@@ -5,7 +5,8 @@ import {
   HardDrive, FileText, Activity, RefreshCw, Eye, Calendar, Info, Undo2, ArrowLeftRight, History
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { collection, getDocs, setDoc, doc, deleteDoc, query, orderBy, limit, writeBatch } from 'firebase/firestore';
+import { collection, doc, query, orderBy, limit, writeBatch } from 'firebase/firestore';
+import { getDocs, setDoc, deleteDoc, getTenantId } from '../../services/contentService';
 import { db } from '../../firebase';
 import { Patient, Appointment, AuditLog, DocumentVersion, TrashItem } from '../../types';
 import { contentService } from '../../services/contentService';
@@ -514,7 +515,9 @@ export default function BackupTab({ patients, appointments, user, siteContent, o
 
         setRestoreStage('Sincronizando configurações gerais...');
         if (json.siteContent) {
-          await setDoc(doc(db, 'site_content', 'main'), json.siteContent, { merge: true });
+          const tenantId = getTenantId();
+          await setDoc(doc(db, 'site_content', `${tenantId}_published`), json.siteContent, { merge: true });
+          await setDoc(doc(db, 'site_content', `${tenantId}_draft`), json.siteContent, { merge: true });
         }
 
         setRestoreProgress(100);
@@ -926,7 +929,7 @@ export default function BackupTab({ patients, appointments, user, siteContent, o
                       <td className="p-3 font-mono">{log.recordCount}</td>
                       <td className="p-3">
                         <div className="flex items-center gap-1 text-[10px] text-sand-500">
-                          {log.encrypted && <Lock size={10} className="text-emerald-600" title="Criptografia AES-256" />}
+                          {log.encrypted && <Lock size={10} className="text-emerald-600" />}
                           {log.compressed && <span className="font-mono text-[9px] font-bold text-sage-600 bg-sage-50 px-1 rounded">ZIP</span>}
                         </div>
                       </td>

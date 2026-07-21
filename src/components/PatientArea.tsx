@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, Clock, Video, CheckCircle2, AlertCircle, XCircle, Search, Copy, Printer, RefreshCw, FileText } from 'lucide-react';
+import { X, Calendar, Clock, Video, CheckCircle2, AlertCircle, XCircle, Search, Copy, Printer, RefreshCw, FileText, QrCode } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useSiteContent } from '../context/SiteContext';
 import { contentService } from '../services/contentService';
@@ -30,6 +30,10 @@ export default function PatientArea({ isOpen, onClose }: PatientAreaProps) {
 
   // Copy meeting link feedback
   const [copiedApptId, setCopiedApptId] = useState<string | null>(null);
+
+  // Pix modal state
+  const [viewingPixAppt, setViewingPixAppt] = useState<any | null>(null);
+  const [copiedPixId, setCopiedPixId] = useState<string | null>(null);
 
   // Load agenda metadata for rescheduling
   useEffect(() => {
@@ -381,6 +385,17 @@ export default function PatientArea({ isOpen, onClose }: PatientAreaProps) {
 
                             {/* Standard actions */}
                             <div className="flex gap-2 ml-auto">
+                              {appt.status === 'pending_payment' && appt.paymentType === 'pix' && (
+                                <button
+                                  onClick={() => setViewingPixAppt(appt)}
+                                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer shadow-sm"
+                                  title="Pagar com PIX"
+                                >
+                                  <QrCode size={12} />
+                                  <span>Pagar PIX</span>
+                                </button>
+                              )}
+
                               {appt.status === 'confirmed' && (
                                 <button
                                   onClick={() => setViewingReceipt(appt)}
@@ -610,6 +625,94 @@ export default function PatientArea({ isOpen, onClose }: PatientAreaProps) {
 
                 </div>
 
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Pix Payment Drawer Modal */}
+        <AnimatePresence>
+          {viewingPixAppt && (
+            <div className="fixed inset-0 z-55 bg-sand-950/40 backdrop-blur-sm flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="bg-white rounded-3xl shadow-xl border border-sand-200 max-w-sm w-full overflow-hidden"
+              >
+                <div className="px-5 py-4 bg-sand-50 border-b border-sand-150 flex items-center justify-between">
+                  <div>
+                    <h3 className="font-serif font-bold text-sand-950 text-base">Pagamento PIX</h3>
+                    <p className="text-[11px] text-sand-600">Escaneie o QR Code ou copie o código</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setViewingPixAppt(null);
+                      setCopiedPixId(null);
+                    }}
+                    className="p-1 rounded-full hover:bg-sand-200 text-sand-500 cursor-pointer"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div className="p-6 flex flex-col items-center text-center space-y-4">
+                  <p className="text-xs text-sand-700">
+                    Efetue o pagamento de <span className="font-bold text-dusty-800 font-mono">R$ {viewingPixAppt.amount},00</span> para confirmar seu horário.
+                  </p>
+
+                  <div className="bg-white p-3 rounded-xl border border-sand-200 shadow-sm">
+                    {viewingPixAppt.qrCode ? (
+                      <img
+                        src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(viewingPixAppt.qrCode)}`}
+                        alt="QR Code PIX"
+                        referrerPolicy="no-referrer"
+                        className="w-44 h-44 object-contain rounded-lg"
+                      />
+                    ) : (
+                      <div className="w-44 h-44 bg-sand-50 rounded-lg flex flex-col items-center justify-center border border-dashed border-sand-300 relative">
+                        <QrCode size={56} className="text-sand-400" />
+                        <span className="text-[10px] text-sand-500 font-semibold mt-2">Código não gerado</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {viewingPixAppt.qrCode && (
+                    <div className="w-full space-y-2">
+                      <p className="text-[10px] font-mono font-bold text-emerald-800 uppercase bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100 inline-block">
+                        PIX Copia e Cola
+                      </p>
+                      <div className="w-full flex items-center gap-2 bg-sand-50 px-3 py-2 rounded-xl border border-sand-200">
+                        <input
+                          type="text"
+                          readOnly
+                          value={viewingPixAppt.qrCode}
+                          className="text-[10px] font-mono text-sand-600 bg-transparent flex-1 focus:outline-none select-all overflow-ellipsis truncate"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(viewingPixAppt.qrCode);
+                            setCopiedPixId(viewingPixAppt.id);
+                            setTimeout(() => setCopiedPixId(null), 2000);
+                          }}
+                          className={`p-1.5 rounded-lg border transition-all shrink-0 cursor-pointer ${
+                            copiedPixId === viewingPixAppt.id
+                              ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                              : 'bg-white hover:bg-sand-100 border-sand-200 text-sand-700'
+                          }`}
+                        >
+                          {copiedPixId === viewingPixAppt.id ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="text-[10px] text-sand-500 text-left space-y-1 w-full bg-sand-50/50 p-3 rounded-xl border border-sand-100">
+                    <p>1. Abra o app do seu banco e escolha "Pagar com Pix" / "Pix Copia e Cola".</p>
+                    <p>2. O pagamento é processado instantaneamente em ambiente seguro.</p>
+                  </div>
+                </div>
               </motion.div>
             </div>
           )}

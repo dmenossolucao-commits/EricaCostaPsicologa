@@ -1,6 +1,8 @@
 {
-  "name": "Psicóloga Erica Costa",
-  "description": "Site institucional moderno, elegante e acolhedor para a Psicóloga Erica Costa, focado em atendimento psicológico online.",
+  "name": "MenteCare Enterprise SaaS",
+  "description": "Plataforma SaaS de gestão de consultórios e clínicas de psicologia com prontuário eletrônico criptografado, teleconsulta integrada, faturamento e CMS customizável.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

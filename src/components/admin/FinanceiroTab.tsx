@@ -417,27 +417,57 @@ export default function FinanceiroTab({ patients, appointments, onRefresh, siteC
     const printContent = document.getElementById(elementId);
     if (!printContent) return;
     
-    const originalContent = document.body.innerHTML;
+    // Create a hidden iframe for print to keep the SPA state and avoid page reload
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
     
-    // Apply temporary clean print container
-    document.body.innerHTML = `
-      <style>
-        @media print {
-          body { background: white; color: black; font-family: sans-serif; padding: 2cm; }
-          .no-print { display: none !important; }
-        }
-      </style>
-      <div style="width: 100%; max-width: 800px; margin: 0 auto;">
-        ${printContent.innerHTML}
-      </div>
-    `;
-    
-    window.print();
-    
-    // Restore
-    document.body.innerHTML = originalContent;
-    // Fast page refresh to restore event handlers (SPA React state handles re-render easily)
-    window.location.reload();
+    const doc = iframe.contentWindow?.document || iframe.contentDocument;
+    if (doc) {
+      doc.open();
+      doc.write(`
+        <html>
+          <head>
+            <title>Impressão</title>
+            <style>
+              body { 
+                background: white; 
+                color: black; 
+                font-family: sans-serif; 
+                padding: 1.5cm; 
+              }
+              table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+              th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 12px; }
+              th { background-color: #f2f2f2; }
+              .no-print { display: none !important; }
+              @media print {
+                body { background: white; color: black; font-family: sans-serif; }
+                .no-print { display: none !important; }
+              }
+            </style>
+          </head>
+          <body>
+            <div style="width: 100%; max-width: 800px; margin: 0 auto;">
+              ${printContent.innerHTML}
+            </div>
+            <script>
+              window.onload = function() {
+                window.print();
+                setTimeout(function() {
+                  window.frameElement.remove();
+                }, 100);
+              };
+            </script>
+          </body>
+        </html>
+      `);
+      doc.close();
+    }
   };
 
   return (
@@ -1031,7 +1061,7 @@ export default function FinanceiroTab({ patients, appointments, onRefresh, siteC
       {/* HIDDEN TEMPLATES FOR PRINT (NATIVE BROWSER PDF) */}
       <div id="report-print-template" className="hidden">
         <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
-          <h2 style={{ fontFamily: 'serif', margin: '0 0 5px 0' }}>Dra. Erica Costa - Psicologia Clínica</h2>
+          <h2 style={{ fontFamily: 'serif', margin: '0 0 5px 0' }}>{siteContent?.psychologist_info?.name || 'Clínica de Psicologia'}</h2>
           <p style={{ margin: '0 0 20px 0', fontSize: '12px', color: '#666' }}>CRP: {siteContent?.psychologist_info?.crp || '11/12345'} • Relatório de Fechamento Financeiro</p>
           <hr />
           <h3 style={{ margin: '20px 0 10px 0' }}>Demonstrativo Consolidado ({reportType})</h3>
@@ -1245,7 +1275,7 @@ export default function FinanceiroTab({ patients, appointments, onRefresh, siteC
                 {/* Psychologist Header */}
                 <div className="flex justify-between items-start border-b border-sand-200 pb-5">
                   <div className="space-y-1">
-                    <h2 className="text-lg font-serif font-bold text-sand-950">{siteContent?.psychologist_info?.name || 'Dra. Erica Costa'}</h2>
+                    <h2 className="text-lg font-serif font-bold text-sand-950">{siteContent?.psychologist_info?.name || 'Profissional'}</h2>
                     <p className="text-[10px] font-mono font-bold uppercase text-softblue-600">Psicologia Clínica & Psicoterapia</p>
                     <p className="text-[10px] font-mono text-sand-500">CRP: {siteContent?.psychologist_info?.crp || '11/12345'}</p>
                   </div>
@@ -1297,7 +1327,7 @@ export default function FinanceiroTab({ patients, appointments, onRefresh, siteC
                 <div className="pt-4 border-t border-sand-150 flex flex-col items-center justify-center text-center space-y-1.5">
                   <div className="flex items-center gap-1.5 text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-100 font-mono text-[10px] font-bold uppercase tracking-wider">
                     <ShieldCheck size={13} />
-                    <span>Assinado Eletronicamente por {siteContent?.psychologist_info?.name || 'Erica Costa'}</span>
+                    <span>Assinado Eletronicamente por {siteContent?.psychologist_info?.name || 'Profissional'}</span>
                   </div>
                   <p className="text-[8px] font-mono text-sand-400">ID ASSINATURA: SHA-256:{receiptTx.id.toUpperCase()}</p>
                 </div>

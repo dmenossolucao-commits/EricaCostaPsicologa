@@ -9,9 +9,8 @@ import { useSiteContent } from '../context/SiteContext';
 import { contentService } from '../services/contentService';
 import { db, auth } from '../firebase';
 import { updateProfile } from 'firebase/auth';
-import { 
-  collection, doc, getDocs, addDoc, deleteDoc, updateDoc 
-} from 'firebase/firestore';
+import { collection } from 'firebase/firestore';
+import { doc, getDocs, addDoc, deleteDoc, updateDoc } from '../services/contentService';
 
 interface MediaManagerProps {
   user: any;

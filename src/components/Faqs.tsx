@@ -5,7 +5,7 @@ import { useSiteContent } from '../context/SiteContext';
 
 export default function Faqs() {
   const { siteContent } = useSiteContent();
-  const { faqs } = siteContent;
+  const faqs = siteContent?.faqs || [];
   const [openId, setOpenId] = useState<string | null>("primeira-consulta");
   const [selectedCategory, setSelectedCategory] = useState<string>("Todos");
 
