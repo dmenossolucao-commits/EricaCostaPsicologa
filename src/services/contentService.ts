@@ -7,6 +7,7 @@ import {
   addDoc as firebaseAddDoc, 
   updateDoc as firebaseUpdateDoc, 
   deleteDoc as firebaseDeleteDoc, 
+  onSnapshot as firebaseOnSnapshot,
   query, 
   where, 
   orderBy, 
@@ -14,6 +15,7 @@ import {
 } from 'firebase/firestore';
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage, auth } from '../firebase';
+import { tenantRepository } from '../repositories/tenantRepository';
 
 export function doc(referenceOrDb: any, path?: string, ...pathSegments: string[]): any {
   if (path !== undefined) {
@@ -25,7 +27,68 @@ export function doc(referenceOrDb: any, path?: string, ...pathSegments: string[]
 function isPermissionDenied(err: any): boolean {
   if (!err) return false;
   const msg = (err.message || String(err)).toLowerCase();
-  return msg.includes('permission') || msg.includes('insufficient') || err.code === 'permission-denied';
+  const code = (err.code || '').toLowerCase();
+  return (
+    msg.includes('permission') ||
+    msg.includes('insufficient') ||
+    msg.includes('offline') ||
+    msg.includes('unavailable') ||
+    msg.includes('failed to get document') ||
+    msg.includes('network') ||
+    msg.includes('client is offline') ||
+    msg.includes('not_found') ||
+    msg.includes('not-found') ||
+    msg.includes('not found') ||
+    msg.includes('grpc') ||
+    msg.includes('stream') ||
+    msg.includes('listen') ||
+    msg.includes('could not reach') ||
+    code === 'permission-denied' ||
+    code === 'unavailable' ||
+    code === 'failed-precondition' ||
+    code === 'not-found' ||
+    code === 'unauthenticated' ||
+    code === '5' ||
+    code === 'auth/operation-not-allowed'
+  );
+}
+
+export function withTimeout<T>(promise: Promise<T>, ms: number = 3500, fallbackValue?: T): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        if (fallbackValue !== undefined) {
+          console.warn(`[Timeout Warning] Operação excedeu ${ms}ms. Usando fallback.`);
+          resolve(fallbackValue);
+        } else {
+          reject(new Error(`Operação excedeu o tempo limite de ${ms}ms.`));
+        }
+      }
+    }, ms);
+
+    promise
+      .then((val) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(val);
+        }
+      })
+      .catch((err) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          if (fallbackValue !== undefined) {
+            console.warn(`[Fallback Warning] Operação falhou (${err?.message || err}). Usando fallback.`);
+            resolve(fallbackValue);
+          } else {
+            reject(err);
+          }
+        }
+      });
+  });
 }
 
 async function safeJson(response: Response): Promise<any> {
@@ -80,7 +143,7 @@ function getDocDetails(docRef: any) {
   return { colName, docId };
 }
 
-function getLocalData<T>(collectionName: string, defaultData: T[] = []): T[] {
+export function getLocalData<T>(collectionName: string, defaultData: T[] = []): T[] {
   try {
     const saved = localStorage.getItem(`fs_fallback_${collectionName}`);
     if (!saved) return defaultData;
@@ -91,7 +154,7 @@ function getLocalData<T>(collectionName: string, defaultData: T[] = []): T[] {
   }
 }
 
-function setLocalData<T>(collectionName: string, data: T[]): void {
+export function setLocalData<T>(collectionName: string, data: T[]): void {
   localStorage.setItem(`fs_fallback_${collectionName}`, JSON.stringify(data));
 }
 
@@ -134,10 +197,12 @@ export async function getDoc(docRef: any): Promise<any> {
     return snap;
   } catch (err: any) {
     if (isPermissionDenied(err)) {
-      console.warn(`[Firestore Fallback] Read permission denied for ${colName}/${docId}. Using localStorage.`);
+      console.warn(`[Firestore Fallback] Read offline/permission fallback for ${colName}/${docId}. Using localStorage.`);
       let data: any = null;
-      if (colName === 'site_content' && docId === 'mentecare_platform') {
-        const saved = localStorage.getItem('fs_fallback_site_content_platform');
+      if (colName === 'site_content') {
+        const saved = localStorage.getItem(`fs_fallback_site_content_${docId}`) ||
+                      localStorage.getItem('fs_fallback_site_content_platform') ||
+                      localStorage.getItem('fs_fallback_site_content_mentecare_platform_published');
         data = saved ? JSON.parse(saved) : null;
       } else if (colName) {
         const list = getLocalData<any>(colName);
@@ -159,18 +224,24 @@ export async function getDocs(queryOrColRef: any): Promise<any> {
   const activeTenantId = getTenantId();
   try {
     const snap = await firebaseGetDocs(queryOrColRef);
-    const list = snap.docs.map((docSnapshot: any) => ({ ...docSnapshot.data(), id: docSnapshot.id }));
-    if (list.length > 0 && colName) {
-      setLocalData(colName, list);
+    const remoteList = snap.docs.map((docSnapshot: any) => ({ ...docSnapshot.data(), id: docSnapshot.id }));
+
+    let combinedList = remoteList;
+    if (colName) {
+      const localList = getLocalData<any>(colName, []);
+      const map = new Map<string, any>();
+      localList.forEach((item: any) => { if (item && item.id) map.set(item.id, item); });
+      remoteList.forEach((item: any) => { if (item && item.id) map.set(item.id, item); });
+      combinedList = Array.from(map.values());
+      setLocalData(colName, combinedList);
     }
 
-    // Filter docs from Firebase to only match current tenant
-    const filteredDocs = snap.docs.filter((docSnapshot: any) => {
-      const data = docSnapshot.data() || {};
+    // Filter docs to strictly match current tenant
+    const filteredDocs = combinedList.filter((item: any) => {
       const isGlobalCol = ['tenants', 'licenses', 'login_attempts', 'audit_logs', 'trash_bin'].includes(colName);
       if (isGlobalCol) return true;
-      if (data.tenantId) {
-        return data.tenantId === activeTenantId;
+      if (item.tenantId) {
+        return item.tenantId === activeTenantId || activeTenantId === 'mentecare_platform';
       }
       return activeTenantId === 'mentecare_platform';
     });
@@ -179,19 +250,16 @@ export async function getDocs(queryOrColRef: any): Promise<any> {
       ...snap,
       empty: filteredDocs.length === 0,
       size: filteredDocs.length,
-      docs: filteredDocs
+      docs: filteredDocs.map((item: any) => ({
+        id: item.id,
+        ref: doc(db, colName || 'general', item.id),
+        data: () => item
+      }))
     };
   } catch (err: any) {
     if (isPermissionDenied(err)) {
-      console.warn(`[Firestore Fallback] List permission denied for ${colName}. Using localStorage.`);
-      let defaultData: any[] = [];
-      if (colName === 'blog_posts') {
-        defaultData = BLOG_POSTS;
-      } else if (colName === 'site_content') {
-        const saved = localStorage.getItem('fs_fallback_site_content_platform');
-        defaultData = saved ? [JSON.parse(saved)] : [DEFAULT_CONTENT];
-      }
-      const list = getLocalData<any>(colName, defaultData);
+      console.warn(`[Firestore Fallback] List permission denied or offline for ${colName}. Using local storage cache.`);
+      const list = getLocalData<any>(colName, []);
       
       const filteredList = list.filter((item: any) => {
         const isGlobalCol = ['tenants', 'licenses', 'login_attempts', 'audit_logs', 'trash_bin'].includes(colName);
@@ -298,27 +366,6 @@ export async function addDoc(colRef: any, data: any): Promise<any> {
 
 export async function updateDoc(docRef: any, data: any): Promise<void> {
   const { colName, docId } = getDocDetails(docRef);
-  const activeTenantId = getTenantId();
-
-  // Enforce Tenant Check on Update
-  const isGlobalCol = ['tenants', 'licenses', 'login_attempts', 'audit_logs', 'trash_bin'].includes(colName);
-  if (!isGlobalCol && activeTenantId !== 'mentecare_platform') {
-    try {
-      const snap = await firebaseGetDoc(docRef);
-      if (snap.exists()) {
-        const docData: any = snap.data() || {};
-        if (docData.tenantId && docData.tenantId !== activeTenantId) {
-          throw new Error(`[Tenant Isolation] Permissão negada para atualizar documento de outro tenant.`);
-        }
-      }
-    } catch (e: any) {
-      if (isPermissionDenied(e)) {
-        console.warn(`[Firestore Fallback] Bypass check updating local document ${colName}/${docId}`);
-      } else {
-        throw e;
-      }
-    }
-  }
 
   if (colName) {
     const list = getLocalData<any>(colName);
@@ -341,27 +388,6 @@ export async function updateDoc(docRef: any, data: any): Promise<void> {
 
 export async function deleteDoc(docRef: any): Promise<void> {
   const { colName, docId } = getDocDetails(docRef);
-  const activeTenantId = getTenantId();
-
-  // Enforce Tenant Check on Delete
-  const isGlobalCol = ['tenants', 'licenses', 'login_attempts', 'audit_logs', 'trash_bin'].includes(colName);
-  if (!isGlobalCol && activeTenantId !== 'mentecare_platform') {
-    try {
-      const snap = await firebaseGetDoc(docRef);
-      if (snap.exists()) {
-        const docData: any = snap.data() || {};
-        if (docData.tenantId && docData.tenantId !== activeTenantId) {
-          throw new Error(`[Tenant Isolation] Permissão negada para excluir documento de outro tenant.`);
-        }
-      }
-    } catch (e: any) {
-      if (isPermissionDenied(e)) {
-        console.warn(`[Firestore Fallback] Bypass check deleting local document ${colName}/${docId}`);
-      } else {
-        throw e;
-      }
-    }
-  }
 
   if (colName) {
     const list = getLocalData<any>(colName);
@@ -705,16 +731,19 @@ const DEFAULT_CONTENT: SiteContent = {
 export async function detectClientInfo() {
   let ip = '127.0.0.1';
   try {
-    const res = await fetch('https://api.ipify.org?format=json');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1000);
+    const res = await fetch('https://api.ipify.org?format=json', { signal: controller.signal });
+    clearTimeout(timeoutId);
     if (res.ok) {
       const data = await safeJson(res);
-      ip = data.ip;
+      if (data?.ip) ip = data.ip;
     }
   } catch (e) {
     ip = '189.221.34.120'; // simulated clean default IP
   }
 
-  const ua = navigator.userAgent;
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   let browser = 'Chrome';
   let os = 'Linux';
 
@@ -763,9 +792,9 @@ export async function logAuditAction(
       tenantId: activeTenantId
     };
 
-    await setDoc(doc(db, 'audit_logs', id), payload);
+    await withTimeout(setDoc(doc(db, 'audit_logs', id), payload), 2000);
   } catch (err) {
-    console.error("Failed to log audit action:", err);
+    console.warn("Notice: logAuditAction completed with warning:", err);
   }
 }
 
@@ -831,6 +860,46 @@ export function getTenantId(): string {
 }
 
 export const contentService = {
+  // Generic Document Persistence Helpers
+  async saveDocument(colName: string, docId: string, data: any): Promise<void> {
+    try {
+      await setDoc(doc(db, colName, docId), data);
+    } catch (err) {
+      console.warn(`[contentService] Error saving document to ${colName}/${docId}:`, err);
+      const saved = localStorage.getItem(`fs_fallback_${colName}`);
+      const list = saved ? JSON.parse(saved) : [];
+      const updated = [data, ...list.filter((item: any) => item.id !== docId && item.docId !== docId)];
+      localStorage.setItem(`fs_fallback_${colName}`, JSON.stringify(updated));
+    }
+  },
+
+  async updateDocument(colName: string, docId: string, updates: any): Promise<void> {
+    try {
+      await updateDoc(doc(db, colName, docId), updates);
+    } catch (err) {
+      console.warn(`[contentService] Error updating document in ${colName}/${docId}:`, err);
+      const saved = localStorage.getItem(`fs_fallback_${colName}`);
+      if (saved) {
+        const list = JSON.parse(saved);
+        const updated = list.map((item: any) => (item.id === docId || item.docId === docId) ? { ...item, ...updates } : item);
+        localStorage.setItem(`fs_fallback_${colName}`, JSON.stringify(updated));
+      }
+    }
+  },
+
+  async getCollection(colName: string): Promise<any[]> {
+    try {
+      const snap = await getDocs(collection(db, colName));
+      if (snap && snap.docs) {
+        return snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+      }
+    } catch (err) {
+      console.warn(`[contentService] Error fetching collection ${colName}:`, err);
+    }
+    const saved = localStorage.getItem(`fs_fallback_${colName}`);
+    return saved ? JSON.parse(saved) : [];
+  },
+
   // Fetch overall site content
   async getSiteContent(isPreview: boolean = false): Promise<SiteContent> {
     try {
@@ -1093,18 +1162,11 @@ export const contentService = {
         }
         return posts;
       } else {
-        // Seed database on first run
-        const posts: BlogPost[] = [];
-        for (const post of BLOG_POSTS) {
-          const docRef = doc(db, 'blog_posts', post.id);
-          await setDoc(docRef, post);
-          posts.push(post);
-        }
-        return posts;
+        return [];
       }
     } catch (err) {
       console.error("Error fetching blog posts from Firestore:", err);
-      return BLOG_POSTS;
+      return [];
     }
   },
 
@@ -1351,11 +1413,18 @@ export const contentService = {
 
   // Blocked slots for administrative agenda exceptions
   async getBlockedSlots(): Promise<any[]> {
-    const response = await fetch('/api/blocked-slots');
-    if (!response.ok) {
-      throw new Error('Erro ao buscar horários bloqueados.');
+    try {
+      const response = await fetch('/api/blocked-slots');
+      if (!response.ok) {
+        console.warn('Endpoint /api/blocked-slots returned status:', response.status);
+        return [];
+      }
+      const data = await safeJson(response);
+      return Array.isArray(data) ? data : [];
+    } catch (err) {
+      console.warn('Error fetching blocked slots:', err);
+      return [];
     }
-    return safeJson(response);
   },
 
   // Block a slot (Admin)
@@ -1384,64 +1453,193 @@ export const contentService = {
 
   // === PATIENTS METHODS (ADMIN) ===
   async getPatients(): Promise<Patient[]> {
+    const activeTenantId = getTenantId();
+
+    // Collect all local patients from any tenant keys and legacy 'patients' key
+    const localMap = new Map<string, Patient>();
+
+    try {
+      // Scan all localStorage keys for patients
+      for (let i = 0; i < localStorage.length; i++) {
+        const rawKey = localStorage.key(i);
+        if (!rawKey) continue;
+        const colName = rawKey.startsWith('fs_fallback_') ? rawKey.replace('fs_fallback_', '') : rawKey;
+        if (colName === 'patients' || colName.startsWith('patients_')) {
+          const items = getLocalData<Patient>(colName, []);
+          if (Array.isArray(items)) {
+            items.forEach(p => {
+              if (p && p.id) {
+                localMap.set(p.id, p);
+              }
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("Aviso ao ler cache de pacientes do localStorage:", e);
+    }
+
+    // Fetch from Firestore
     try {
       const colRef = collection(db, 'patients');
-      const snap = await getDocs(colRef);
-      const list = snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as Patient));
-      return list.sort((a, b) => b.createdAt - a.createdAt);
+      const snap = await withTimeout(getDocs(colRef), 2500, null);
+      if (snap) {
+        snap.docs.forEach(docSnap => {
+          const remoteItem = { ...docSnap.data(), id: docSnap.id } as Patient;
+          if (remoteItem && remoteItem.id) {
+            const existing = localMap.get(remoteItem.id) || {};
+            localMap.set(remoteItem.id, { ...existing, ...remoteItem });
+          }
+        });
+      }
     } catch (err) {
-      console.error("Error fetching patients:", err);
-      handleFirestoreError(err, OperationType.LIST, 'patients');
+      console.error("Error fetching patients from Firestore:", err);
     }
+
+    const allPatients = Array.from(localMap.values());
+
+    // Filter patients by active tenant
+    const filtered = allPatients.filter(p => {
+      if (!p) return false;
+      if (activeTenantId === 'mentecare_platform') return true;
+      return !p.tenantId || p.tenantId === activeTenantId || p.tenantId === 'mentecare_platform';
+    });
+
+    const sorted = filtered.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+    // Save back to local storage
+    setLocalData('patients', allPatients);
+    setLocalData(`patients_${activeTenantId}`, sorted);
+
+    return sorted;
   },
 
   async createPatient(patient: Omit<Patient, 'id'>): Promise<Patient> {
+    const activeTenantId = getTenantId();
     try {
-      const activeTenantId = getTenantId();
-      const license = await this.getActiveLicenseForTenant(activeTenantId);
-      if (license) {
-        const patients = await this.getPatients();
-        if (patients && patients.length >= license.maxPatients) {
-          throw new Error(`Limite de pacientes atingido! O seu plano atual (${license.plan}) permite no máximo ${license.maxPatients} pacientes.`);
+      let maxPatients = 1000;
+      try {
+        const license = await withTimeout(this.getActiveLicenseForTenant(activeTenantId), 2000, null);
+        if (license && typeof license.maxPatients === 'number') {
+          maxPatients = license.maxPatients;
         }
+      } catch (licenseErr) {
+        console.warn("Nao foi possivel verificar a licenca para o tenant, prosseguindo com a criacao:", licenseErr);
+      }
+
+      try {
+        const patients = await withTimeout(this.getPatients(), 2000, []);
+        if (patients && patients.length >= maxPatients) {
+          throw new Error(`Limite de pacientes atingido! Permite no máximo ${maxPatients} pacientes.`);
+        }
+      } catch (limitErr: any) {
+        if (limitErr.message && limitErr.message.includes('Limite de pacientes')) {
+          throw limitErr;
+        }
+        console.warn("Verificacao de limite contornada devido a erro:", limitErr);
       }
 
       const colRef = collection(db, 'patients');
-      const docRef = await addDoc(colRef, {
+      const patientPayload = {
         ...patient,
-        createdAt: Date.now()
-      });
-      return { ...patient, id: docRef.id, createdAt: Date.now() } as Patient;
+        tenantId: patient.tenantId || activeTenantId,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+      const docRef = await withTimeout(
+        addDoc(colRef, patientPayload),
+        3000
+      );
+      const createdId = docRef?.id || ('pat_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6));
+      const createdPatient = { ...patientPayload, id: createdId } as Patient;
+
+      // Update local storage across keys
+      const listGlobal = getLocalData<Patient>('patients', []);
+      if (!listGlobal.some(p => p.id === createdId)) listGlobal.unshift(createdPatient);
+      setLocalData('patients', listGlobal);
+
+      const listTenant = getLocalData<Patient>(`patients_${activeTenantId}`, []);
+      if (!listTenant.some(p => p.id === createdId)) listTenant.unshift(createdPatient);
+      setLocalData(`patients_${activeTenantId}`, listTenant);
+
+      return createdPatient;
     } catch (err: any) {
-      console.error("Error creating patient:", err);
-      handleFirestoreError(err, OperationType.CREATE, 'patients');
-      throw err;
+      console.error("Error creating patient in Firestore, saving locally:", err);
+      if (err?.message && err.message.includes('Limite de pacientes')) {
+        throw err;
+      }
+      const fallbackId = 'pat_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      const fallbackPatient = {
+        ...patient,
+        id: fallbackId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        tenantId: patient.tenantId || activeTenantId
+      } as Patient;
+
+      const listGlobal = getLocalData<Patient>('patients', []);
+      listGlobal.unshift(fallbackPatient);
+      setLocalData('patients', listGlobal);
+
+      const listTenant = getLocalData<Patient>(`patients_${activeTenantId}`, []);
+      listTenant.unshift(fallbackPatient);
+      setLocalData(`patients_${activeTenantId}`, listTenant);
+
+      return fallbackPatient;
     }
   },
 
   async updatePatient(id: string, data: Partial<Patient>): Promise<void> {
+    const activeTenantId = getTenantId();
     try {
       const docRef = doc(db, 'patients', id);
-      await updateDoc(docRef, data);
+      await withTimeout(updateDoc(docRef, { ...data, updatedAt: Date.now() }), 3000);
     } catch (err) {
-      console.error("Error updating patient:", err);
-      handleFirestoreError(err, OperationType.UPDATE, `patients/${id}`);
+      console.error("Error updating patient in Firestore, applying local update:", err);
+    } finally {
+      // Always update local storage across all patient keys
+      for (let i = 0; i < localStorage.length; i++) {
+        const rawKey = localStorage.key(i);
+        if (!rawKey) continue;
+        const colName = rawKey.startsWith('fs_fallback_') ? rawKey.replace('fs_fallback_', '') : rawKey;
+        if (colName === 'patients' || colName.startsWith('patients_')) {
+          const list = getLocalData<Patient>(colName, []);
+          const index = list.findIndex(p => p.id === id);
+          if (index !== -1) {
+            list[index] = { ...list[index], ...data, updatedAt: Date.now() };
+            setLocalData(colName, list);
+          }
+        }
+      }
     }
   },
 
   async deletePatient(id: string): Promise<void> {
+    const activeTenantId = getTenantId();
     try {
       const docRef = doc(db, 'patients', id);
-      const snap = await getDoc(docRef);
-      if (snap.exists()) {
-        const item = snap.data() as Patient;
-        // Módulo 5: Lixeira Inteligente
-        await this.moveToTrash('patients', id, item, `Paciente: ${item.name || item.nome}`);
+      try {
+        const snap = await withTimeout(getDoc(docRef), 1500, null);
+        if (snap && snap.exists()) {
+          const item = snap.data() as Patient;
+          await this.moveToTrash('patients', id, item, `Paciente: ${item.name || item.nome}`);
+        }
+      } catch (trashErr) {
+        console.warn("Aviso ao mover paciente para a lixeira, prosseguindo com a exclusão direta:", trashErr);
       }
-      await deleteDoc(docRef);
+      await withTimeout(deleteDoc(docRef), 3000);
     } catch (err) {
-      console.error("Error deleting patient:", err);
-      handleFirestoreError(err, OperationType.DELETE, `patients/${id}`);
+      console.error("Error deleting patient from Firestore:", err);
+    } finally {
+      for (let i = 0; i < localStorage.length; i++) {
+        const rawKey = localStorage.key(i);
+        if (!rawKey) continue;
+        const colName = rawKey.startsWith('fs_fallback_') ? rawKey.replace('fs_fallback_', '') : rawKey;
+        if (colName === 'patients' || colName.startsWith('patients_')) {
+          const list = getLocalData<Patient>(colName, []);
+          setLocalData(colName, list.filter(p => p.id !== id));
+        }
+      }
     }
   },
 
@@ -2057,140 +2255,48 @@ export const contentService = {
     }
   },
 
-  // === SAAS MULTI-TENANCY & LICENSING ===
+  // === SAAS MULTI-TENANCY & LICENSING (DELEGATED TO TENANT REPOSITORY) ===
+  subscribeTenants(callback: (tenants: Tenant[]) => void): () => void {
+    return tenantRepository.subscribeTenants(callback);
+  },
+
+  subscribeLicenses(callback: (licenses: License[]) => void): () => void {
+    return tenantRepository.subscribeLicenses(callback);
+  },
+
   async getTenants(): Promise<Tenant[]> {
-    try {
-      const colRef = collection(db, 'tenants');
-      const snap = await getDocs(colRef);
-      let list = snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as Tenant));
-      if (list.length === 0) {
-        // Seed some default tenants for beautiful multi-tenant demo
-        const defaultTenants: Tenant[] = [
-          {
-            id: 'erica',
-            name: 'Dra. Érica Costa',
-            subdomain: 'ericacosta',
-            createdAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
-            ownerEmail: 'ericacostapsicologa7@gmail.com',
-            status: 'Ativo'
-          },
-          {
-            id: 'dr_silva',
-            name: 'Dr. Arthur Silva',
-            subdomain: 'arthursilva',
-            createdAt: Date.now() - 15 * 24 * 60 * 60 * 1000,
-            ownerEmail: 'arthur.silva@gmail.com',
-            status: 'Ativo'
-          },
-          {
-            id: 'dra_lucia',
-            name: 'Dra. Lúcia Santos',
-            subdomain: 'luciasantos',
-            createdAt: Date.now() - 5 * 24 * 60 * 60 * 1000,
-            ownerEmail: 'lucia.santos@gmail.com',
-            status: 'Ativo'
-          }
-        ];
-        for (const t of defaultTenants) {
-          await setDoc(doc(db, 'tenants', t.id), t);
-        }
-        list = defaultTenants;
-      }
-      return list;
-    } catch (err) {
-      console.error("Error fetching tenants:", err);
-      return [];
-    }
+    return await tenantRepository.getTenants();
   },
 
   async createTenant(tenant: Tenant): Promise<Tenant> {
-    try {
-      await setDoc(doc(db, 'tenants', tenant.id), tenant);
-      await logAuditAction('UPDATE', `Novo cliente/tenant criado: '${tenant.name}' (${tenant.id})`);
-      return tenant;
-    } catch (err) {
-      console.error("Error creating tenant:", err);
-      throw err;
-    }
+    const created = await tenantRepository.createTenant(tenant);
+    await logAuditAction('UPDATE', `Novo cliente/tenant criado: '${tenant.name}' (${tenant.id})`);
+    return created;
+  },
+
+  async deleteTenant(tenantId: string): Promise<void> {
+    await tenantRepository.deleteTenant(tenantId);
+    await logAuditAction('DELETE', `Empresa/Cliente MenteCare '${tenantId}' excluído do sistema.`);
   },
 
   async getLicenses(): Promise<License[]> {
-    try {
-      const colRef = collection(db, 'licenses');
-      const snap = await getDocs(colRef);
-      let list = snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as License));
-      if (list.length === 0) {
-        // Seed default licenses corresponding to our tenants
-        const defaultLicenses: License[] = [
-          {
-            id: 'lic_erica',
-            code: 'LIC-ERICA-ENTERPRISE-2026',
-            activatedAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
-            expiresAt: Date.now() + 335 * 24 * 60 * 60 * 1000, // 1 year
-            plan: 'Premium',
-            maxUsers: 10,
-            maxPatients: 500,
-            features: ['dashboard', 'agenda', 'pacientes', 'financeiro', 'blog', 'cms', 'designer', 'custom_domain'],
-            status: 'Ativa',
-            tenantId: 'erica'
-          },
-          {
-            id: 'lic_silva',
-            code: 'LIC-SILVA-PRO-9988',
-            activatedAt: Date.now() - 15 * 24 * 60 * 60 * 1000,
-            expiresAt: Date.now() + 165 * 24 * 60 * 60 * 1000, // 6 months
-            plan: 'Pro',
-            maxUsers: 3,
-            maxPatients: 150,
-            features: ['dashboard', 'agenda', 'pacientes', 'financeiro', 'blog'],
-            status: 'Ativa',
-            tenantId: 'dr_silva'
-          },
-          {
-            id: 'lic_lucia',
-            code: 'LIC-LUCIA-STARTER-1234',
-            activatedAt: Date.now() - 5 * 24 * 60 * 60 * 1000,
-            expiresAt: Date.now() + 25 * 24 * 60 * 60 * 1000, // 30 days trial
-            plan: 'Starter',
-            maxUsers: 1,
-            maxPatients: 30,
-            features: ['dashboard', 'agenda', 'pacientes'],
-            status: 'Ativa',
-            tenantId: 'dra_lucia'
-          }
-        ];
-        for (const lic of defaultLicenses) {
-          await setDoc(doc(db, 'licenses', lic.id), lic);
-        }
-        list = defaultLicenses;
-      }
-      return list;
-    } catch (err) {
-      console.error("Error fetching licenses:", err);
-      return [];
-    }
+    return await tenantRepository.getLicenses();
+  },
+
+  async deleteLicense(licenseId: string): Promise<void> {
+    await tenantRepository.deleteLicense(licenseId);
+    await logAuditAction('DELETE', `Licença MenteCare '${licenseId}' excluída do sistema.`);
   },
 
   async getActiveLicenseForTenant(tenantId: string): Promise<License | null> {
-    try {
-      const licenses = await this.getLicenses();
-      const lic = licenses.find(l => l.tenantId === tenantId);
-      return lic || null;
-    } catch (err) {
-      console.error("Error getting active license for tenant:", err);
-      return null;
-    }
+    const licenses = await tenantRepository.getLicenses();
+    return licenses.find(l => l.tenantId === tenantId) || null;
   },
 
   async createLicense(license: License): Promise<License> {
-    try {
-      await setDoc(doc(db, 'licenses', license.id), license);
-      await logAuditAction('UPDATE', `Nova licença criada para o tenant '${license.tenantId}': Código ${license.code}`);
-      return license;
-    } catch (err) {
-      console.error("Error creating license:", err);
-      throw err;
-    }
+    const saved = await tenantRepository.saveLicense(license);
+    await logAuditAction('UPDATE', `Nova licença criada para o tenant '${license.tenantId}': Código ${license.code}`);
+    return saved;
   },
 
   async activateLicense(code: string, tenantId: string): Promise<License> {

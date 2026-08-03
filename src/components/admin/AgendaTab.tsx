@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Calendar, Clock, User, Check, X, Trash2, ChevronLeft, ChevronRight, Plus, 
-  MapPin, AlertCircle, Edit3, DollarSign, Filter, FileText, CheckCircle, ArrowRight, Save
+  MapPin, AlertCircle, Edit3, DollarSign, Filter, FileText, CheckCircle, ArrowRight, Save, Video
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Appointment, Patient, FinancialTransaction } from '../../types';
@@ -12,9 +12,10 @@ interface AgendaTabProps {
   appointments: Appointment[];
   onRefresh: () => Promise<void>;
   siteContent: any;
+  onStartTeleconsulta?: (appointment: Appointment) => void;
 }
 
-export default function AgendaTab({ patients, appointments, onRefresh, siteContent }: AgendaTabProps) {
+export default function AgendaTab({ patients, appointments, onRefresh, siteContent, onStartTeleconsulta }: AgendaTabProps) {
   // Navigation states
   const [currentDate, setCurrentDate] = useState(new Date());
   const [viewMode, setViewMode] = useState<'day' | 'week' | 'month'>('week');
@@ -810,6 +811,33 @@ export default function AgendaTab({ patients, appointments, onRefresh, siteConte
 
               {/* Form */}
               <form onSubmit={handleSubmit} className="p-6 space-y-4">
+                {selectedAppointment && (
+                  <div className="p-3.5 bg-emerald-50/90 border border-emerald-200 rounded-xl flex items-center justify-between gap-3 shadow-2xs">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                        <Video size={16} />
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-emerald-950">Teleconsulta ao Vivo (Google Meet)</p>
+                        <p className="text-[10px] text-emerald-700">Realize o atendimento por vídeo e a escrita do prontuário na mesma tela.</p>
+                      </div>
+                    </div>
+                    {onStartTeleconsulta && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsModalOpen(false);
+                          onStartTeleconsulta(selectedAppointment);
+                        }}
+                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer shadow-xs transition-colors shrink-0"
+                      >
+                        <Video size={12} />
+                        <span>Iniciar Consulta</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {errorMsg && (
                   <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-center gap-2">
                     <AlertCircle size={14} className="text-rose-600 shrink-0" />

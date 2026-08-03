@@ -4,14 +4,15 @@ import { getAuth } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
 import firebaseConfig from '../firebase-applet-config.json';
 
+const config = firebaseConfig as any;
 const app = initializeApp(firebaseConfig);
-export const db = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
-  ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
+export const db = config.firestoreDatabaseId && config.firestoreDatabaseId !== '(default)'
+  ? getFirestore(app, config.firestoreDatabaseId)
   : getFirestore(app);
 export const auth = getAuth(app);
 
 // Resolve the correct storage bucket name from firebase-applet-config.json
-const bucketName = firebaseConfig.storageBucket || `${firebaseConfig.projectId}.appspot.com`;
+const bucketName = config.storageBucket || `${config.projectId}.appspot.com`;
 
 console.log(`[Firebase Initialization] Initializing Storage with bucket: gs://${bucketName}`);
 export const storage = getStorage(app, `gs://${bucketName}`);

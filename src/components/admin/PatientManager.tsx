@@ -24,7 +24,10 @@ import {
   Loader2,
   Clock,
   HeartHandshake,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Key,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { contentService } from '../../services/contentService';
 import { Patient, PatientAddress } from '../../types';
@@ -91,6 +94,9 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
   const [cepLoading, setCepLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [showSaveSuccessModal, setShowSaveSuccessModal] = useState(false);
+  const [savedPatientName, setSavedPatientName] = useState('');
+  const [patientToDelete, setPatientToDelete] = useState<Patient | null>(null);
 
   // Fetch Patients
   const loadPatients = async () => {
@@ -154,6 +160,9 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
   // Create or Update Patient
   const handleSavePatient = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log("[LOG] Processando salvamento de cadastro do paciente...");
+    const startTime = Date.now();
+
     if (!form.nome.trim()) {
       setErrorMessage("O nome do paciente é obrigatório.");
       return;
@@ -254,48 +263,107 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
         observacoes: form.observacoes || '',
         updatedAt: Date.now(),
         status: form.status || 'Ativo',
-        photoUrl: form.photoUrl || ''
+        photoUrl: form.photoUrl || '',
+        tenantId: (isEditing && selectedPatient?.tenantId) || localStorage.getItem('active_tenant_id') || 'mentecare_platform'
       };
+
+      const savedName = form.nome;
+      setSavedPatientName(savedName);
 
       if (isEditing && selectedPatient) {
         // Update
         await contentService.updatePatient(selectedPatient.id, payload);
-        setSuccessMessage("Cadastro atualizado com sucesso!");
-        setIsEditing(false);
+        console.log(`[LOG] Ficha cadastral atualizada com sucesso em ${Date.now() - startTime}ms`);
+        setSuccessMessage(`✅ Ficha do paciente '${savedName}' atualizada com sucesso! O cadastro foi gravado e você retornou ao menu inicial.`);
       } else {
         // Create
-        await contentService.createPatient(payload);
-        setSuccessMessage("Paciente cadastrado com sucesso!");
-        setIsFormOpen(false);
+        const created = await contentService.createPatient(payload);
+        console.log(`[LOG] Novo paciente cadastrado com sucesso ID ${created.id} em ${Date.now() - startTime}ms`);
+        setSuccessMessage(`✅ Paciente '${savedName}' cadastrado com sucesso! O cadastro foi gravado e você retornou ao menu inicial.`);
       }
+
+      setShowSaveSuccessModal(true);
+
+      // Return to initial menu / list view automatically
+      setSelectedPatient(null);
+      setIsEditing(false);
+      setIsFormOpen(false);
+      setForm({ ...INITIAL_FORM, endereco: { ...INITIAL_ADDRESS } });
 
       await loadPatients();
       
-      // Reset success banner after 3s
-      setTimeout(() => setSuccessMessage(''), 3000);
+      // Scroll smoothly to top of module & window
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      const container = document.getElementById('patient-management-module');
+      if (container) {
+        container.scrollIntoView({ behavior: 'smooth' });
+      }
+
+      // Reset success banner after 10s
+      setTimeout(() => setSuccessMessage(''), 10000);
+      setTimeout(() => setShowSaveSuccessModal(false), 5000);
     } catch (err: any) {
-      console.error(err);
-      setErrorMessage("Erro ao salvar cadastro: " + (err.message || err));
+      console.error("[LOG] Erro ao salvar cadastro:", err);
+      setErrorMessage("Erro ao salvar cadastro: " + (err?.message || String(err)));
     } finally {
       setFormLoading(false);
     }
   };
 
-  // Delete Patient
-  const handleDeletePatient = async (id: string) => {
-    if (!window.confirm("Tem certeza que deseja remover permanentemente este paciente e todo o seu histórico clínico? Esta ação é irreversível.")) {
-      return;
+  // Open Delete Patient Modal
+  const handleDeletePatient = (id: string) => {
+    const pt = patients.find(p => p.id === id) || (selectedPatient?.id === id ? selectedPatient : null);
+    if (pt) {
+      setPatientToDelete(pt);
     }
+  };
+
+  // Confirm Delete Patient
+  const confirmDeletePatient = async () => {
+    if (!patientToDelete) return;
+    const target = { ...patientToDelete };
+    setPatientToDelete(null);
 
     if (onGlobalLoading) onGlobalLoading(true);
+    setLoading(true);
+    setErrorMessage('');
+    setSuccessMessage('');
+
     try {
-      await contentService.deletePatient(id);
-      setSelectedPatient(null);
+      console.log(`[LOG] Iniciando exclusão do paciente ID: ${target.id}`);
+      const startTime = Date.now();
+
+      // 1. Optimistic removal from local state
+      setPatients(prev => prev.filter(p => p.id !== target.id));
+      if (selectedPatient?.id === target.id) {
+        setSelectedPatient(null);
+      }
+
+      // 2. Perform deletion
+      await contentService.deletePatient(target.id);
+
+      // 3. Notify parent callback
+      if (onPatientsUpdated) {
+        const remaining = patients.filter(p => p.id !== target.id);
+        onPatientsUpdated(remaining);
+      }
+
+      console.log(`[LOG] Paciente excluído com sucesso em ${Date.now() - startTime}ms - ID: ${target.id}`);
+      setSuccessMessage(`✅ Ficha do paciente '${target.nome || target.name}' excluída com sucesso.`);
+      
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      const container = document.getElementById('patient-management-module');
+      if (container) {
+        container.scrollIntoView({ behavior: 'smooth' });
+      }
+
+      setTimeout(() => setSuccessMessage(''), 7000);
+    } catch (err: any) {
+      console.error("[LOG] Erro ao deletar paciente:", err);
+      setErrorMessage("Erro ao excluir paciente: " + (err?.message || String(err)));
       await loadPatients();
-    } catch (err) {
-      console.error("Erro ao deletar paciente:", err);
-      alert("Erro ao excluir paciente.");
     } finally {
+      setLoading(false);
       if (onGlobalLoading) onGlobalLoading(false);
     }
   };
@@ -372,16 +440,62 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
 
   return (
     <div id="patient-management-module" className="space-y-6">
+
+      {/* Success Modal Overlay */}
+      {showSaveSuccessModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.9, opacity: 0 }}
+            className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl border border-emerald-100 text-center space-y-5 relative"
+          >
+            <button 
+              onClick={() => setShowSaveSuccessModal(false)}
+              className="absolute top-4 right-4 text-sand-400 hover:text-sand-700 p-1.5 rounded-full hover:bg-sand-100 transition-colors cursor-pointer"
+            >
+              <X size={18} />
+            </button>
+            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
+              <CheckCircle size={36} />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-xl font-serif font-bold text-sand-950">Paciente Salvo com Sucesso!</h3>
+              <p className="text-xs text-sand-600 leading-relaxed font-medium">
+                {savedPatientName ? `Os dados de '${savedPatientName}' foram gravados com sucesso.` : 'O cadastro foi atualizado no sistema.'}
+              </p>
+            </div>
+            <div className="p-3 bg-emerald-50 rounded-2xl border border-emerald-200 text-xs text-emerald-800 font-semibold flex items-center justify-center gap-2">
+              <CheckCircle size={16} className="text-emerald-600 shrink-0" />
+              <span>Você retornou automaticamente para o início da lista de pacientes.</span>
+            </div>
+            <button
+              onClick={() => setShowSaveSuccessModal(false)}
+              className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-2xl text-xs uppercase tracking-wider transition-all shadow-md cursor-pointer"
+            >
+              Concluído
+            </button>
+          </motion.div>
+        </div>
+      )}
       
       {/* Dynamic Alerts Banner */}
       {successMessage && (
         <motion.div 
-          initial={{ opacity: 0, y: -10 }} 
-          animate={{ opacity: 1, y: 0 }} 
-          className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-4 py-3 rounded-2xl flex items-center gap-3 text-xs font-semibold"
+          initial={{ opacity: 0, scale: 0.98, y: -10 }} 
+          animate={{ opacity: 1, scale: 1, y: 0 }} 
+          className="bg-emerald-500 text-white border border-emerald-600 px-5 py-3.5 rounded-2xl flex items-center justify-between gap-3 text-xs font-bold shadow-md"
         >
-          <CheckCircle className="text-emerald-600 shrink-0" size={16} />
-          <span>{successMessage}</span>
+          <div className="flex items-center gap-3">
+            <CheckCircle className="text-white shrink-0" size={20} />
+            <span className="text-sm font-semibold">{successMessage}</span>
+          </div>
+          <button 
+            onClick={() => setSuccessMessage('')}
+            className="p-1 hover:bg-emerald-600 rounded-lg cursor-pointer transition-colors"
+          >
+            <X size={16} />
+          </button>
         </motion.div>
       )}
 
@@ -698,6 +812,20 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
                           </button>
                         </div>
                       </div>
+
+                      {/* Error & Success Alerts inside Edit Form */}
+                      {errorMessage && (
+                        <div className="bg-rose-50 text-rose-800 border border-rose-200 p-3 rounded-xl flex items-center gap-2 text-xs font-semibold">
+                          <ShieldAlert className="text-rose-600 shrink-0" size={16} />
+                          <span>{errorMessage}</span>
+                        </div>
+                      )}
+                      {successMessage && (
+                        <div className="bg-emerald-50 text-emerald-800 border border-emerald-200 p-3 rounded-xl flex items-center gap-2 text-xs font-semibold">
+                          <CheckCircle className="text-emerald-600 shrink-0" size={16} />
+                          <span>{successMessage}</span>
+                        </div>
+                      )}
 
                       {/* Core inputs identical to the registration form */}
                       <div className="space-y-6">
@@ -1057,6 +1185,20 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
 
             <form onSubmit={handleSavePatient} className="space-y-6 text-xs">
               
+              {/* Error & Success Alerts inside Creation Form */}
+              {errorMessage && (
+                <div className="bg-rose-50 text-rose-800 border border-rose-200 p-3 rounded-xl flex items-center gap-2 text-xs font-semibold">
+                  <ShieldAlert className="text-rose-600 shrink-0" size={16} />
+                  <span>{errorMessage}</span>
+                </div>
+              )}
+              {successMessage && (
+                <div className="bg-emerald-50 text-emerald-800 border border-emerald-200 p-3 rounded-xl flex items-center gap-2 text-xs font-semibold">
+                  <CheckCircle className="text-emerald-600 shrink-0" size={16} />
+                  <span>{successMessage}</span>
+                </div>
+              )}
+
               <div className="space-y-6">
                 
                 {/* Seção 1: Dados Pessoais */}
@@ -1344,7 +1486,7 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
                   className="px-5 py-2.5 bg-sand-900 text-white hover:bg-sand-950 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                 >
                   {formLoading ? <Loader2 size={13} className="animate-spin" /> : <PlusCircle size={13} />}
-                  <span>Salvar Cadastro</span>
+                  <span>Finalizar Cadastro</span>
                 </button>
               </div>
 
@@ -1545,19 +1687,26 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
                             </span>
                           </td>
 
-                          {/* Action view profile */}
+                          {/* Action view profile & Delete */}
                           <td className="py-4 px-6 text-right" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex justify-end gap-2">
+                            <div className="flex justify-end items-center gap-2">
                               <button
                                 onClick={() => {
                                   setSelectedPatient(pt);
                                   setActiveTab('cadastro');
                                 }}
-                                className="p-1.5 hover:bg-sand-100 text-sand-700 rounded-lg flex items-center gap-1 font-bold text-[10px] uppercase cursor-pointer"
+                                className="px-2.5 py-1 hover:bg-sand-100 text-sand-700 rounded-lg flex items-center gap-1 font-bold text-[10px] uppercase cursor-pointer"
                                 title="Ver Prontuário / Ficha completa"
                               >
                                 <span>Ver Prontuário</span>
                                 <ChevronRight size={12} />
+                              </button>
+                              <button
+                                onClick={() => handleDeletePatient(pt.id)}
+                                className="p-1.5 hover:bg-rose-50 text-rose-600 hover:text-rose-800 rounded-lg flex items-center gap-1 font-bold text-[10px] uppercase cursor-pointer transition-colors border border-transparent hover:border-rose-200"
+                                title="Excluir Cliente / Paciente"
+                              >
+                                <Trash2 size={13} />
                               </button>
                             </div>
                           </td>
@@ -1620,7 +1769,7 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
                         </div>
                       </div>
 
-                      <div className="flex justify-end pt-1" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex justify-end items-center gap-2 pt-1" onClick={(e) => e.stopPropagation()}>
                         <button
                           onClick={() => {
                             setSelectedPatient(pt);
@@ -1628,8 +1777,15 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
                           }}
                           className="px-4 py-2 bg-sand-50 hover:bg-sand-100 text-sand-800 border border-sand-200 rounded-xl font-bold text-[10px] uppercase cursor-pointer flex items-center gap-1.5 transition-all"
                         >
-                          <span>Abrir</span>
+                          <span>Abrir Prontuário</span>
                           <ChevronRight size={12} />
+                        </button>
+                        <button
+                          onClick={() => handleDeletePatient(pt.id)}
+                          className="p-2 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 rounded-xl font-bold text-[10px] uppercase cursor-pointer flex items-center gap-1 transition-all"
+                          title="Excluir Cliente"
+                        >
+                          <Trash2 size={13} />
                         </button>
                       </div>
                     </div>
@@ -1662,6 +1818,53 @@ export const PatientManager: React.FC<PatientManagerProps> = ({
         )}
 
       </AnimatePresence>
+
+      {/* Delete Patient Modal */}
+      {patientToDelete && (
+        <div className="fixed inset-0 bg-sand-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full border border-sand-200 shadow-2xl space-y-5"
+          >
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="p-3 bg-rose-50 border border-rose-100 rounded-2xl">
+                <Trash2 size={24} />
+              </div>
+              <div>
+                <h3 className="font-serif font-bold text-sand-950 text-base">Excluir Paciente</h3>
+                <p className="text-[11px] text-sand-500">Remover paciente e histórico do sistema.</p>
+              </div>
+            </div>
+
+            <div className="p-4 bg-sand-50 border border-sand-200 rounded-2xl text-xs space-y-2">
+              <p className="text-sand-800">Deseja realmente excluir a ficha do paciente:</p>
+              <p className="font-bold text-sand-950 font-mono text-sm bg-white p-2 rounded-xl border border-sand-200">
+                {patientToDelete.nome || patientToDelete.name}
+              </p>
+              <p className="text-[10px] text-rose-600 font-semibold">
+                ⚠️ Todo o histórico de consultas, prontuários e documentos deste paciente serão removidos. Esta ação é irreversível.
+              </p>
+            </div>
+
+            <div className="flex gap-3 justify-end pt-2">
+              <button
+                onClick={() => setPatientToDelete(null)}
+                className="px-4 py-2 border border-sand-300 hover:bg-sand-50 text-sand-700 font-bold rounded-xl text-xs cursor-pointer transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmDeletePatient}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs cursor-pointer shadow-md flex items-center gap-2 transition-all"
+              >
+                <Trash2 size={14} />
+                <span>Confirmar Exclusão</span>
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 };

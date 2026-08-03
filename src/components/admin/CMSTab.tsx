@@ -3,14 +3,15 @@ import {
   Layout, Paintbrush, Settings, Layers, FolderOpen, Plus, Trash2, 
   Eye, Check, RotateCcw, FileText, ChevronUp, ChevronDown, 
   BookOpen, HelpCircle, Heart, Phone, MapPin, Sparkles, Copy, 
-  History, Diff, Undo2, Save, Send, AlertCircle, RefreshCw
+  History, Diff, Undo2, Save, Send, AlertCircle, RefreshCw,
+  Camera, Upload, Image as ImageIcon, CheckCircle2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useSiteContent } from '../../context/SiteContext';
 import { RichTextEditor } from './RichTextEditor';
 import { contentService, logAuditAction } from '../../services/contentService';
 
-type CmsSubTab = 'textos' | 'estilo' | 'secoes' | 'versoes';
+type CmsSubTab = 'textos' | 'fotos' | 'estilo' | 'secoes' | 'versoes';
 
 export default function CMSTab() {
   const { 
@@ -26,6 +27,9 @@ export default function CMSTab() {
   const [localCms, setLocalCms] = useState<any>(null);
   const [localAppearance, setLocalAppearance] = useState<any>(null);
   const [localSections, setLocalSections] = useState<any[]>([]);
+  const [localInfo, setLocalInfo] = useState<any>(null);
+  const [uploadingImageKey, setUploadingImageKey] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [versions, setVersions] = useState<any[]>([]);
   const [loadingVersions, setLoadingVersions] = useState(false);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
@@ -41,6 +45,7 @@ export default function CMSTab() {
       setLocalCms(JSON.parse(JSON.stringify(siteContent.cms_content || {})));
       setLocalAppearance(JSON.parse(JSON.stringify(siteContent.appearance || {})));
       setLocalSections(JSON.parse(JSON.stringify(siteContent.sections || [])));
+      setLocalInfo(JSON.parse(JSON.stringify(siteContent.psychologist_info || {})));
     }
   }, [siteContent]);
 
@@ -80,7 +85,8 @@ export default function CMSTab() {
       await updateSiteContent({
         cms_content: localCms,
         appearance: localAppearance,
-        sections: localSections
+        sections: localSections,
+        psychologist_info: localInfo
       });
       await logAuditAction('UPDATE', `Rascunho de alterações do CMS salvo pelo usuário.`);
     } catch (err) {
@@ -165,6 +171,45 @@ export default function CMSTab() {
       ...prev,
       [field]: value
     }));
+  };
+
+  // Update psychologist_info fields (photos, branding, info)
+  const updateInfoField = (field: string, value: string) => {
+    setLocalInfo((prev: any) => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  // Handle direct file upload for CMS photos
+  const handleImageUpload = async (key: string, file: File) => {
+    setUploadingImageKey(key);
+    setUploadProgress(10);
+    try {
+      const resultUrl = await contentService.uploadImage(file, 'site', (progress) => {
+        setUploadProgress(progress);
+      });
+      updateInfoField(key, resultUrl);
+
+      // Auto-save draft to Firestore so the new uploaded URL is immediately persisted
+      const updatedInfo = {
+        ...(localInfo || {}),
+        [key]: resultUrl
+      };
+      await updateSiteContent({
+        cms_content: localCms,
+        appearance: localAppearance,
+        sections: localSections,
+        psychologist_info: updatedInfo
+      });
+      await logAuditAction('UPDATE', `Upload de imagem (${key}) realizado e salvo com sucesso.`);
+    } catch (err: any) {
+      console.error("Erro ao fazer upload da imagem:", err);
+      alert("Erro ao processar imagem: " + (err.message || err));
+    } finally {
+      setUploadingImageKey(null);
+      setUploadProgress(0);
+    }
   };
 
   // Sections management helper actions
@@ -309,9 +354,10 @@ export default function CMSTab() {
       </div>
 
       {/* Primary Sub-tabs */}
-      <div className="flex border-b border-sand-150 gap-6">
+      <div className="flex border-b border-sand-150 gap-6 overflow-x-auto">
         {[
           { id: 'textos', label: 'Editar Textos do Site', icon: <FileText size={14} /> },
+          { id: 'fotos', label: 'Fotos & Imagens do Site', icon: <Camera size={14} /> },
           { id: 'estilo', label: 'Identidade Visual & Cores', icon: <Paintbrush size={14} /> },
           { id: 'secoes', label: 'Organização de Seções', icon: <Layers size={14} /> },
           { id: 'versoes', label: 'Histórico & Versões', icon: <History size={14} /> },
@@ -370,6 +416,56 @@ export default function CMSTab() {
               {/* Dynamic Inputs per Category */}
               {selectedCategory === 'hero' && (
                 <div className="space-y-4">
+                  <div className="border border-sand-200/80 p-4 rounded-2xl bg-sand-50/50 space-y-2">
+                    <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono">Foto do Banner Principal (Hero)</label>
+                    <div className="flex gap-2 items-center">
+                      <input
+                        type="text"
+                        value={localInfo?.heroImageUrl || ''}
+                        onChange={(e) => updateInfoField('heroImageUrl', e.target.value)}
+                        placeholder="Cole a URL ou selecione do computador"
+                        className="flex-1 px-3.5 py-2 rounded-xl border border-sand-200 text-xs bg-white"
+                      />
+                      <label className="px-3 py-2 bg-softblue-600 hover:bg-softblue-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shrink-0 transition-all shadow-xs">
+                        <Upload size={13} />
+                        <span>Upload Foto</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              handleImageUpload('heroImageUrl', e.target.files[0]);
+                            }
+                          }}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            setIsPublishing(true);
+                            await handleSaveDraft();
+                            await publishContent("Postar foto do Banner Principal");
+                            alert("Foto do Banner Principal postada e publicada no site com sucesso!");
+                          } catch (e: any) {
+                            alert("Erro ao postar foto: " + e.message);
+                          } finally {
+                            setIsPublishing(false);
+                          }
+                        }}
+                        disabled={isSavingDraft || isPublishing}
+                        className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shrink-0 transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                      >
+                        <Send size={13} />
+                        <span>Postar Foto</span>
+                      </button>
+                    </div>
+                    {uploadingImageKey === 'heroImageUrl' && (
+                      <span className="text-[10px] font-mono text-softblue-600 font-bold block">Processando imagem... {uploadProgress}%</span>
+                    )}
+                  </div>
+
                   <div>
                     <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Tag Superior</label>
                     <input
@@ -481,6 +577,56 @@ export default function CMSTab() {
 
               {selectedCategory === 'about' && (
                 <div className="space-y-4">
+                  <div className="border border-sand-200/80 p-4 rounded-2xl bg-sand-50/50 space-y-2">
+                    <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono">Foto do Perfil / Biografia (Sobre Mim)</label>
+                    <div className="flex gap-2 items-center">
+                      <input
+                        type="text"
+                        value={localInfo?.aboutImageUrl || ''}
+                        onChange={(e) => updateInfoField('aboutImageUrl', e.target.value)}
+                        placeholder="Cole a URL ou selecione do computador"
+                        className="flex-1 px-3.5 py-2 rounded-xl border border-sand-200 text-xs bg-white"
+                      />
+                      <label className="px-3 py-2 bg-softblue-600 hover:bg-softblue-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shrink-0 transition-all shadow-xs">
+                        <Upload size={13} />
+                        <span>Upload Foto</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              handleImageUpload('aboutImageUrl', e.target.files[0]);
+                            }
+                          }}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            setIsPublishing(true);
+                            await handleSaveDraft();
+                            await publishContent("Postar foto da Biografia / Perfil");
+                            alert("Foto da Biografia postada e publicada no site com sucesso!");
+                          } catch (e: any) {
+                            alert("Erro ao postar foto: " + e.message);
+                          } finally {
+                            setIsPublishing(false);
+                          }
+                        }}
+                        disabled={isSavingDraft || isPublishing}
+                        className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shrink-0 transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                      >
+                        <Send size={13} />
+                        <span>Postar Foto</span>
+                      </button>
+                    </div>
+                    {uploadingImageKey === 'aboutImageUrl' && (
+                      <span className="text-[10px] font-mono text-softblue-600 font-bold block">Processando imagem... {uploadProgress}%</span>
+                    )}
+                  </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">Tag Superior</label>
@@ -965,6 +1111,217 @@ export default function CMSTab() {
           </div>
         )}
 
+        {/* SUB-TAB: FOTOS E IMAGENS DO SITE */}
+        {activeSubTab === 'fotos' && (
+          <div className="space-y-6">
+            <div className="bg-sand-50/60 p-5 rounded-2xl border border-sand-200/60 flex items-start gap-3">
+              <div className="p-2.5 bg-softblue-100 text-softblue-700 rounded-xl">
+                <Camera size={20} />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-sand-950 font-serif">Trocar Fotos e Mídias do Site</h3>
+                <p className="text-xs text-sand-600 mt-0.5 leading-relaxed">
+                  Gerencie as fotos e logotipos que aparecem no seu site. Você pode selecionar um arquivo do seu computador para envio automático ou colar um link de imagem.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {[
+                {
+                  key: 'heroImageUrl',
+                  label: 'Foto Principal do Banner (Hero)',
+                  section: 'Topo da Página Inicial',
+                  desc: 'Aparece em destaque na abertura do site para dar boas-vindas aos seus clientes.',
+                  fit: 'object-cover'
+                },
+                {
+                  key: 'aboutImageUrl',
+                  label: 'Foto da Biografia (Sobre Mim)',
+                  section: 'Seção Sobre Mim',
+                  desc: 'Seu retrato profissional para apresentar sua trajetória e valores aos pacientes.',
+                  fit: 'object-cover'
+                },
+                {
+                  key: 'logoUrl',
+                  label: 'Logotipo Oficial da Clínica',
+                  section: 'Cabeçalho & Menu Navbar',
+                  desc: 'Sua marca oficial. Deixe em branco caso prefira exibir o nome em texto.',
+                  fit: 'object-contain'
+                },
+                {
+                  key: 'faviconUrl',
+                  label: 'Favicon (Ícone do Navegador)',
+                  section: 'Aba do Navegador',
+                  desc: 'Ícone pequeno exibido na aba do navegador de todos os visitantes.',
+                  fit: 'object-contain'
+                }
+              ].map((item) => {
+                const currentUrl = localInfo?.[item.key] || '';
+                const isUploading = uploadingImageKey === item.key;
+
+                return (
+                  <div key={item.key} className="bg-white p-5 rounded-2xl border border-sand-200 shadow-sm space-y-4 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px] font-mono font-bold uppercase text-softblue-700 bg-softblue-50 border border-softblue-100 px-2.5 py-1 rounded-md">
+                          {item.section}
+                        </span>
+                        {currentUrl ? (
+                          <span className="text-[9px] font-mono font-bold uppercase text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
+                            Configurada
+                          </span>
+                        ) : (
+                          <span className="text-[9px] font-mono font-bold uppercase text-sand-400 bg-sand-100 px-2 py-0.5 rounded">
+                            Padrão
+                          </span>
+                        )}
+                      </div>
+                      <h4 className="text-sm font-bold text-sand-950 mt-2.5 font-serif">{item.label}</h4>
+                      <p className="text-xs text-sand-500 mt-1">{item.desc}</p>
+                    </div>
+
+                    {/* Preview Box */}
+                    <div className="aspect-[16/9] w-full rounded-xl bg-sand-50 border border-dashed border-sand-300 overflow-hidden relative flex items-center justify-center p-2">
+                      {currentUrl ? (
+                        <img
+                          src={currentUrl}
+                          alt={item.label}
+                          className={`w-full h-full rounded-lg ${item.fit}`}
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <div className="text-center p-4">
+                          <ImageIcon size={28} className="mx-auto text-sand-300 mb-1" />
+                          <span className="text-[11px] font-mono text-sand-400 block">Nenhuma foto personalizada</span>
+                          <span className="text-[9px] text-sand-400">Exibindo imagem padrão do sistema</span>
+                        </div>
+                      )}
+
+                      {isUploading && (
+                        <div className="absolute inset-0 bg-white/90 backdrop-blur-xs flex flex-col items-center justify-center p-4 space-y-2">
+                          <RefreshCw className="animate-spin text-softblue-600" size={24} />
+                          <span className="text-xs font-bold text-sand-800 font-mono">Processando... {uploadProgress}%</span>
+                          <div className="w-32 bg-sand-100 rounded-full h-1.5 overflow-hidden">
+                            <div className="bg-softblue-600 h-full transition-all" style={{ width: `${uploadProgress}%` }} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Controls */}
+                    <div className="space-y-3 pt-1">
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase text-sand-600 font-mono mb-1">URL / Link da Imagem</label>
+                        <input
+                          type="text"
+                          value={currentUrl}
+                          onChange={(e) => updateInfoField(item.key, e.target.value)}
+                          placeholder="Cole o link da foto ou faça upload abaixo"
+                          className="w-full px-3 py-2 rounded-xl border border-sand-200 text-xs focus:outline-none focus:border-softblue-500 bg-sand-50/50"
+                        />
+                      </div>
+
+                      <div className="flex gap-2">
+                        <label className="flex-1 py-2.5 bg-softblue-600 hover:bg-softblue-700 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all">
+                          <Upload size={14} />
+                          <span>Enviar do Computador</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              if (e.target.files && e.target.files[0]) {
+                                handleImageUpload(item.key, e.target.files[0]);
+                              }
+                            }}
+                          />
+                        </label>
+                        {currentUrl && (
+                          <button
+                            type="button"
+                            onClick={() => updateInfoField(item.key, '')}
+                            className="px-3 py-2.5 border border-rose-200 hover:bg-rose-50 text-rose-600 rounded-xl text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                            title="Restaurar padrão / remover foto"
+                          >
+                            <Trash2 size={14} />
+                            <span>Remover</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Single Postar Foto Action Button */}
+                      <div className="pt-2 border-t border-sand-150">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              setIsPublishing(true);
+                              const updatedInfo = {
+                                ...(localInfo || {}),
+                                [item.key]: currentUrl
+                              };
+                              await updateSiteContent({
+                                cms_content: localCms,
+                                appearance: localAppearance,
+                                sections: localSections,
+                                psychologist_info: updatedInfo
+                              });
+                              await publishContent(`Postar foto: ${item.label}`);
+                              alert(`Foto "${item.label}" postada e publicada no site com sucesso!`);
+                            } catch (e: any) {
+                              alert(`Erro ao postar foto: ${e.message}`);
+                            } finally {
+                              setIsPublishing(false);
+                            }
+                          }}
+                          disabled={isSavingDraft || isPublishing || isUploading}
+                          className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer disabled:opacity-50"
+                        >
+                          <Send size={15} />
+                          <span>Postar Foto no Site</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Bottom Action Banner for Photos Tab */}
+            <div className="bg-sand-900 text-white p-5 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4 shadow-md mt-6">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-white/10 rounded-xl text-emerald-400">
+                  <CheckCircle2 size={20} />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold font-serif">Concluiu as alterações de fotos?</h4>
+                  <p className="text-xs text-sand-300">Clique para salvar o rascunho de todas as mídias ou publicar instantaneamente no seu site.</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 w-full md:w-auto shrink-0">
+                <button
+                  type="button"
+                  onClick={handleSaveDraft}
+                  disabled={isSavingDraft}
+                  className="flex-1 md:flex-initial px-4 py-2.5 bg-sand-800 hover:bg-sand-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 border border-sand-700 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  <Save size={14} />
+                  <span>Salvar Rascunho</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPublishModal(true)}
+                  className="flex-1 md:flex-initial px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer"
+                >
+                  <Send size={14} />
+                  <span>Publicar Fotos no Site</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* SUB-TAB 2: ESTILO (APPEARANCE) */}
         {activeSubTab === 'estilo' && (
           <div className="space-y-6">
@@ -1089,34 +1446,66 @@ export default function CMSTab() {
               <div className="space-y-4">
                 <h4 className="text-xs font-bold text-sand-800 font-mono uppercase border-b pb-1">Identidade Gráfica (Logos & Favicons)</h4>
                 
-                <div>
-                  <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">URL da Imagem do Logotipo</label>
-                  <input
-                    type="text"
-                    value={siteContent.psychologist_info.logoUrl || ''}
-                    onChange={(e) => {
-                      const updatedInfo = { ...siteContent.psychologist_info, logoUrl: e.target.value };
-                      updateSiteContent({ psychologist_info: updatedInfo });
-                    }}
-                    placeholder="Cole a URL ou Base64 do logotipo"
-                    className="w-full px-4 py-2.5 rounded-xl border border-sand-200 text-xs"
-                  />
-                  <p className="text-[9px] text-sand-500 mt-1">Deixe em branco para usar o cabeçalho padrão em texto da clínica.</p>
+                <div className="space-y-2">
+                  <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono">Imagem do Logotipo</label>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="text"
+                      value={localInfo?.logoUrl || ''}
+                      onChange={(e) => updateInfoField('logoUrl', e.target.value)}
+                      placeholder="Cole a URL ou selecione uma imagem"
+                      className="flex-1 px-4 py-2.5 rounded-xl border border-sand-200 text-xs bg-white"
+                    />
+                    <label className="px-3 py-2.5 bg-softblue-600 hover:bg-softblue-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer transition-all shadow-xs shrink-0">
+                      <Upload size={14} />
+                      <span>Upload</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          if (e.target.files && e.target.files[0]) {
+                            handleImageUpload('logoUrl', e.target.files[0]);
+                          }
+                        }}
+                      />
+                    </label>
+                  </div>
+                  {uploadingImageKey === 'logoUrl' && (
+                    <span className="text-[10px] font-mono text-softblue-600 font-bold block">Enviando logotipo... {uploadProgress}%</span>
+                  )}
+                  <p className="text-[9px] text-sand-500">Deixe em branco para usar o cabeçalho padrão em texto da clínica.</p>
                 </div>
 
-                <div>
-                  <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono mb-1">URL do Favicon (Ícone do Navegador)</label>
-                  <input
-                    type="text"
-                    value={siteContent.psychologist_info.faviconUrl || ''}
-                    onChange={(e) => {
-                      const updatedInfo = { ...siteContent.psychologist_info, faviconUrl: e.target.value };
-                      updateSiteContent({ psychologist_info: updatedInfo });
-                    }}
-                    placeholder="Cole a URL ou Base64 do favicon (.ico, .png, etc.)"
-                    className="w-full px-4 py-2.5 rounded-xl border border-sand-200 text-xs"
-                  />
-                  <p className="text-[9px] text-sand-500 mt-1">Este ícone será atualizado dinamicamente na aba do navegador de todos os pacientes.</p>
+                <div className="space-y-2">
+                  <label className="block text-[10px] font-bold uppercase text-sand-700 font-mono">Favicon (Ícone do Navegador)</label>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="text"
+                      value={localInfo?.faviconUrl || ''}
+                      onChange={(e) => updateInfoField('faviconUrl', e.target.value)}
+                      placeholder="Cole a URL ou selecione uma imagem"
+                      className="flex-1 px-4 py-2.5 rounded-xl border border-sand-200 text-xs bg-white"
+                    />
+                    <label className="px-3 py-2.5 bg-softblue-600 hover:bg-softblue-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer transition-all shadow-xs shrink-0">
+                      <Upload size={14} />
+                      <span>Upload</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          if (e.target.files && e.target.files[0]) {
+                            handleImageUpload('faviconUrl', e.target.files[0]);
+                          }
+                        }}
+                      />
+                    </label>
+                  </div>
+                  {uploadingImageKey === 'faviconUrl' && (
+                    <span className="text-[10px] font-mono text-softblue-600 font-bold block">Enviando favicon... {uploadProgress}%</span>
+                  )}
+                  <p className="text-[9px] text-sand-500">Este ícone será atualizado dinamicamente na aba do navegador de todos os pacientes.</p>
                 </div>
 
                 <div className="border border-sand-150 p-4 rounded-2xl bg-sand-50/40 space-y-2 mt-4">

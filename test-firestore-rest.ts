@@ -2,9 +2,10 @@ import firebaseConfig from "./firebase-applet-config.json";
 
 async function test() {
   try {
-    const projectId = firebaseConfig.projectId;
-    const databaseId = firebaseConfig.firestoreDatabaseId;
-    const apiKey = firebaseConfig.apiKey;
+    const cfg = firebaseConfig as any;
+    const projectId = cfg.projectId;
+    const databaseId = cfg.firestoreDatabaseId;
+    const apiKey = cfg.apiKey;
     
     const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents/blocked_slots?key=${apiKey}`;
     console.log("Fetching blocked_slots via REST API...");

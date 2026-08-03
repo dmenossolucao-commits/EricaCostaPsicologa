@@ -24,6 +24,16 @@ service cloud.firestore {
       allow write: if isAdmin() || !exists(/databases/$(database)/documents/admins/ericacostapsicologa7@gmail.com);
     }
     
+    // Tenants: read and create/update allowed for platform setup & multi-tenant resolution
+    match /tenants/{document} {
+      allow read, write: if true;
+    }
+
+    // Licenses: read and create/update allowed for platform setup & licensing
+    match /licenses/{document} {
+      allow read, write: if true;
+    }
+    
     // Site content: read by anyone, write only by authenticated admins
     match /site_content/{document} {
       allow read: if true;

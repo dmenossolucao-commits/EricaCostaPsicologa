@@ -1,9 +1,10 @@
 import firebaseConfig from "./firebase-applet-config.json";
 
 async function testFullFlow() {
-  const apiKey = firebaseConfig.apiKey;
-  const projectId = firebaseConfig.projectId;
-  const databaseId = firebaseConfig.firestoreDatabaseId || "(default)";
+  const cfg = firebaseConfig as any;
+  const apiKey = cfg.apiKey;
+  const projectId = cfg.projectId;
+  const databaseId = cfg.firestoreDatabaseId || "(default)";
   const email = "dmenossolucao@gmail.com";
   const password = "F@b486875";
 

@@ -34,6 +34,38 @@ export interface Appointment {
   modality?: 'Online' | 'Presencial';
   notes?: string;
   discount?: number;
+  
+  // Teleconsulta Google Meet fields
+  meetingId?: string;
+  meetingLink?: string;
+  meetingProvider?: 'google_meet' | 'teams' | 'zoom' | 'jitsi' | 'whereby';
+  meetingStatus?: 'created' | 'in_progress' | 'ended' | 'cancelled';
+  meetingCreatedAt?: number;
+  meetingEndedAt?: number;
+  meetingDuration?: number; // in seconds
+  meetingInvited?: boolean;
+  meetingJoined?: boolean;
+  meetingNotes?: string;
+}
+
+export interface MeetingSession {
+  id: string;
+  meetingId: string;
+  meetingLink: string;
+  meetingProvider: 'google_meet' | 'teams' | 'zoom' | 'jitsi' | 'whereby';
+  meetingStatus: 'created' | 'in_progress' | 'ended' | 'cancelled';
+  meetingCreatedAt: number;
+  meetingEndedAt?: number;
+  meetingDuration?: number; // duration in seconds
+  meetingInvited?: boolean;
+  meetingJoined?: boolean;
+  meetingNotes?: string;
+  patientName: string;
+  patientEmail?: string;
+  patientPhone?: string;
+  patientId?: string;
+  appointmentId?: string;
+  createdAt: number;
 }
 
 export interface FinancialTransaction {
@@ -114,6 +146,7 @@ export interface PatientAddress {
 
 export interface Patient {
   id: string;
+  tenantId?: string;
   name: string;
   email?: string;
   phone?: string;
@@ -149,6 +182,8 @@ export interface Patient {
   photoUrl?: string;
   ultimaConsulta?: string;
   proximaConsulta?: string;
+  login?: string;
+  senha?: string;
 }
 
 export interface PatientRecord {
@@ -178,6 +213,11 @@ export interface PatientRecord {
     ip?: string;
     verified: boolean;
   };
+  meetingId?: string;
+  meetingLink?: string;
+  meetingProvider?: 'google_meet' | 'teams' | 'zoom' | 'jitsi' | 'whereby';
+  meetingStatus?: 'created' | 'in_progress' | 'ended' | 'cancelled';
+  meetingDuration?: number;
 }
 
 export interface PatientDocument {
@@ -287,11 +327,28 @@ export interface License {
 
 export interface Tenant {
   id: string; // matches tenantId
-  name: string;
+  name: string; // Nome da Clínica / Nome Fantasia
+  clinicName?: string;
+  professionalName?: string; // Nome do Psicólogo / Profissional Responsável
   subdomain?: string;
+  crp?: string;
+  cpfCnpj?: string;
+  phone?: string;
+  whatsApp?: string;
+  ownerEmail: string; // Email de acesso principal
+  adminEmail?: string;
+  adminPassword?: string; // Senha de acesso do cliente
+  status: 'Ativo' | 'Bloqueado' | 'Teste' | 'Suspenso' | 'Cancelado';
+  plan?: SaaSPlanId;
+  subscriptionId?: string;
   createdAt: number;
-  ownerEmail: string;
-  status: 'Ativo' | 'Bloqueado';
+  updatedAt?: number;
+  integrations?: {
+    google?: any;
+    mercadoPago?: any;
+    firebase?: any;
+  };
+  permissions?: string[];
 }
 
 

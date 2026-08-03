@@ -122,6 +122,16 @@ export default function Footer() {
         {/* Bottom meta row */}
         <div className="pt-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-sand-500">
           <p>© {currentYear} {name}. Todos os direitos reservados.</p>
+          <div className="flex items-center gap-1.5 text-sand-400 font-mono">
+            <span>Desenvolvido pela plataforma</span>
+            <a 
+              href="/" 
+              className="text-softblue-400 hover:text-softblue-300 font-bold hover:underline flex items-center gap-1"
+              title="Ir para o portal oficial do MenteCare SaaS"
+            >
+              MenteCare Enterprise
+            </a>
+          </div>
         </div>
 
       </div>

@@ -10,6 +10,9 @@ interface EvolutionFormProps {
   onCancel: () => void;
   loading?: boolean;
   patientId?: string;
+  patientName?: string;
+  patientPhone?: string;
+  patientEmail?: string;
 }
 
 export const EvolutionForm: React.FC<EvolutionFormProps> = ({
@@ -18,6 +21,9 @@ export const EvolutionForm: React.FC<EvolutionFormProps> = ({
   onCancel,
   loading = false,
   patientId,
+  patientName,
+  patientPhone,
+  patientEmail,
 }) => {
   // Setup default values
   const todayStr = new Date().toISOString().split('T')[0];
@@ -224,6 +230,11 @@ export const EvolutionForm: React.FC<EvolutionFormProps> = ({
             value={clinicalEvolution}
             onChange={setClinicalEvolution}
             placeholder="Descreva as queixas relatadas, as intervenções técnicas realizadas, as reações emocionais expressas e o progresso clínico observado..."
+            title="Evolução Clínica do Prontuário"
+            patientName={patientName}
+            patientPhone={patientPhone}
+            patientEmail={patientEmail}
+            patientId={patientId}
           />
         </div>
 

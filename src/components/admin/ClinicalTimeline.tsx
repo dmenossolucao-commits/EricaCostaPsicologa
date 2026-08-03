@@ -194,6 +194,9 @@ export const ClinicalTimeline: React.FC<ClinicalTimelineProps> = ({ patient }) =
               }}
               loading={formSubmitLoading}
               patientId={patient.id}
+              patientName={patient.nome || patient.name}
+              patientPhone={patient.whatsapp || patient.telefone || patient.phone}
+              patientEmail={patient.email}
             />
           </motion.div>
         )}

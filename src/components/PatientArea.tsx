@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, Clock, Video, CheckCircle2, AlertCircle, XCircle, Search, Copy, Printer, RefreshCw, FileText, QrCode } from 'lucide-react';
+import { X, Calendar, Clock, Video, CheckCircle2, AlertCircle, XCircle, Search, Copy, Printer, RefreshCw, FileText, QrCode, User, Lock, Key, Eye, EyeOff, Save } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useSiteContent } from '../context/SiteContext';
 import { contentService } from '../services/contentService';
@@ -34,6 +34,76 @@ export default function PatientArea({ isOpen, onClose }: PatientAreaProps) {
   // Pix modal state
   const [viewingPixAppt, setViewingPixAppt] = useState<any | null>(null);
   const [copiedPixId, setCopiedPixId] = useState<string | null>(null);
+
+  // Sub-tabs & Profile state
+  const [activePortalTab, setActivePortalTab] = useState<'consultas' | 'perfil'>('consultas');
+  const [editLogin, setEditLogin] = useState('');
+  const [editSenha, setEditSenha] = useState('');
+  const [confirmSenha, setConfirmSenha] = useState('');
+  const [showNewSenha, setShowNewSenha] = useState(false);
+  const [showConfirmSenha, setShowConfirmSenha] = useState(false);
+  const [profileSuccess, setProfileSuccess] = useState('');
+  const [profileError, setProfileError] = useState('');
+  const [profileLoading, setProfileLoading] = useState(false);
+
+  // Auto populate editLogin if user searched
+  useEffect(() => {
+    if (searchQuery) {
+      setEditLogin(searchQuery);
+    }
+  }, [searchQuery]);
+
+  const handleUpdateCredentials = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setProfileError('');
+    setProfileSuccess('');
+
+    if (!editLogin.trim()) {
+      setProfileError('Por favor, digite um e-mail ou nome de usuário para seu login.');
+      return;
+    }
+
+    if (editSenha.length < 4) {
+      setProfileError('A nova senha deve ter no mínimo 4 caracteres.');
+      return;
+    }
+
+    if (editSenha !== confirmSenha) {
+      setProfileError('A confirmação de senha não confere com a nova senha digitada.');
+      return;
+    }
+
+    setProfileLoading(true);
+    try {
+      const allPatients = await contentService.getPatients();
+      const query = (searchQuery || editLogin).toLowerCase().trim();
+
+      const matchedPt = allPatients.find(p => 
+        (p.email || '').toLowerCase() === query || 
+        (p.login || '').toLowerCase() === query ||
+        (p.telefone || '').replace(/\D/g, '').includes(query.replace(/\D/g, ''))
+      );
+
+      if (!matchedPt) {
+        setProfileError('Paciente não localizado na base. Certifique-se de ter cadastrado uma consulta primeiro.');
+        return;
+      }
+
+      await contentService.updatePatient(matchedPt.id, {
+        login: editLogin.trim(),
+        senha: editSenha.trim()
+      });
+
+      setProfileSuccess('Sua senha e login foram atualizados com sucesso!');
+      setEditSenha('');
+      setConfirmSenha('');
+    } catch (err: any) {
+      console.error(err);
+      setProfileError('Erro ao atualizar credenciais: ' + (err.message || err));
+    } finally {
+      setProfileLoading(false);
+    }
+  };
 
   // Load agenda metadata for rescheduling
   useEffect(() => {
@@ -238,6 +308,32 @@ export default function PatientArea({ isOpen, onClose }: PatientAreaProps) {
 
         {/* Content Body */}
         <div className="p-6 overflow-y-auto flex-1">
+          {/* Sub Navigation Tabs */}
+          <div className="flex border-b border-sand-100 gap-2 mb-6">
+            <button
+              onClick={() => setActivePortalTab('consultas')}
+              className={`px-4 py-2.5 text-xs font-bold flex items-center gap-2 border-b-2 transition-all cursor-pointer ${
+                activePortalTab === 'consultas'
+                  ? 'border-sage-600 text-sage-800 bg-sage-50/50 rounded-t-xl font-bold'
+                  : 'border-transparent text-sand-500 hover:text-sand-800 hover:bg-sand-50/50 rounded-t-xl'
+              }`}
+            >
+              <Calendar size={14} />
+              <span>Minhas Consultas</span>
+            </button>
+            <button
+              onClick={() => setActivePortalTab('perfil')}
+              className={`px-4 py-2.5 text-xs font-bold flex items-center gap-2 border-b-2 transition-all cursor-pointer ${
+                activePortalTab === 'perfil'
+                  ? 'border-sage-600 text-sage-800 bg-sage-50/50 rounded-t-xl font-bold'
+                  : 'border-transparent text-sand-500 hover:text-sand-800 hover:bg-sand-50/50 rounded-t-xl'
+              }`}
+            >
+              <Lock size={14} />
+              <span>Alterar Login & Senha</span>
+            </button>
+          </div>
+
           {error && (
             <div className="mb-4 p-4 rounded-xl bg-rose-50 border border-rose-100 text-rose-800 text-xs flex items-center gap-2">
               <AlertCircle size={16} />
@@ -245,7 +341,109 @@ export default function PatientArea({ isOpen, onClose }: PatientAreaProps) {
             </div>
           )}
 
-          {!isSearched ? (
+          {activePortalTab === 'perfil' ? (
+            /* TAB 2: Alterar Login e Senha */
+            <form onSubmit={handleUpdateCredentials} className="space-y-5">
+              <div className="bg-sage-50/60 p-5 rounded-2xl border border-sage-100 space-y-1">
+                <h3 className="font-bold font-serif text-sm text-sand-900">Alterar Dados de Acesso ao Portal</h3>
+                <p className="text-xs text-sand-600 leading-relaxed">
+                  Defina seu novo nome de usuário/login e uma senha pessoal para acessar a Área do Paciente no site.
+                </p>
+              </div>
+
+              {profileSuccess && (
+                <div className="p-4 bg-emerald-50 border border-emerald-100 text-emerald-800 rounded-xl text-xs flex items-center gap-2 font-semibold">
+                  <CheckCircle2 size={16} />
+                  <span>{profileSuccess}</span>
+                </div>
+              )}
+
+              {profileError && (
+                <div className="p-4 bg-rose-50 border border-rose-100 text-rose-800 rounded-xl text-xs flex items-center gap-2 font-semibold">
+                  <AlertCircle size={16} />
+                  <span>{profileError}</span>
+                </div>
+              )}
+
+              <div className="space-y-4 text-xs">
+                <div>
+                  <label className="block font-bold text-sand-800 uppercase font-mono text-[10px] mb-1.5">
+                    Login / E-mail de Acesso
+                  </label>
+                  <div className="relative">
+                    <User className="absolute left-3.5 top-3 text-sand-400" size={16} />
+                    <input
+                      type="text"
+                      required
+                      value={editLogin}
+                      onChange={(e) => setEditLogin(e.target.value)}
+                      placeholder="ex: joao.silva ou seu e-mail"
+                      className="w-full pl-10 pr-4 py-2.5 border border-sand-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sage-500/20 bg-white text-xs font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-sand-800 uppercase font-mono text-[10px] mb-1.5">
+                    Nova Senha
+                  </label>
+                  <div className="relative">
+                    <Lock className="absolute left-3.5 top-3 text-sand-400" size={16} />
+                    <input
+                      type={showNewSenha ? "text" : "password"}
+                      required
+                      value={editSenha}
+                      onChange={(e) => setEditSenha(e.target.value)}
+                      placeholder="Mínimo 4 caracteres"
+                      className="w-full pl-10 pr-10 py-2.5 border border-sand-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sage-500/20 bg-white text-xs font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewSenha(!showNewSenha)}
+                      className="absolute right-3 top-3 text-sand-400 hover:text-sand-600 cursor-pointer"
+                    >
+                      {showNewSenha ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-sand-800 uppercase font-mono text-[10px] mb-1.5">
+                    Confirmar Nova Senha
+                  </label>
+                  <div className="relative">
+                    <Lock className="absolute left-3.5 top-3 text-sand-400" size={16} />
+                    <input
+                      type={showConfirmSenha ? "text" : "password"}
+                      required
+                      value={confirmSenha}
+                      onChange={(e) => setConfirmSenha(e.target.value)}
+                      placeholder="Repita a nova senha"
+                      className="w-full pl-10 pr-10 py-2.5 border border-sand-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sage-500/20 bg-white text-xs font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmSenha(!showConfirmSenha)}
+                      className="absolute right-3 top-3 text-sand-400 hover:text-sand-600 cursor-pointer"
+                    >
+                      {showConfirmSenha ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-3 flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={profileLoading}
+                    className="px-6 py-3 bg-sage-600 hover:bg-sage-700 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-2 cursor-pointer disabled:opacity-50 transition-all shadow-sm"
+                  >
+                    {profileLoading ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
+                    <span>Salvar Nova Senha</span>
+                  </button>
+                </div>
+              </div>
+            </form>
+          ) : !isSearched ? (
             /* Lookup screen */
             <form onSubmit={handleSearch} className="space-y-6">
               <div className="bg-sage-50/50 rounded-2xl p-5 border border-sage-100/50">

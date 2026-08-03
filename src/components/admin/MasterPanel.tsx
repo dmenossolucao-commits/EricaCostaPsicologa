@@ -9,6 +9,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { contentService } from '../../services/contentService';
 import { Tenant, License, AuditLog, SaaSPlanId } from '../../types';
+import { useTenant } from '../../context/TenantContext';
 import { collection } from 'firebase/firestore';
 import { getDocs, doc, setDoc, getDoc, deleteDoc } from '../../services/contentService';
 import { db } from '../../firebase';
@@ -196,8 +197,7 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
     );
   };
 
-  const [tenants, setTenants] = useState<Tenant[]>([]);
-  const [licenses, setLicenses] = useState<License[]>([]);
+  const { tenants, licenses, deleteTenant: removeTenantGlobal, refresh: refreshTenants } = useTenant();
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [trashItems, setTrashItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -241,6 +241,7 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
   const [newTenantSubdomain, setNewTenantSubdomain] = useState('');
   const [tenantError, setTenantError] = useState('');
   const [tenantSuccess, setTenantSuccess] = useState('');
+  const [masterSuccessMessage, setMasterSuccessMessage] = useState('');
 
   // 4-Step Registration Wizard States
   const [isWizardOpen, setIsWizardOpen] = useState(false);
@@ -279,19 +280,26 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
     const cleanSubdomain = val.toLowerCase()
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove accents
       .replace(/[^a-z0-9]/g, '_')
-      .replace(/_+/g, '_');
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '');
     setWizardForm(prev => ({
       ...prev,
       clinicName: val,
-      subdomain: cleanSubdomain
+      subdomain: cleanSubdomain || prev.subdomain
     }));
   };
 
   const handleProfessionalNameChange = (val: string) => {
+    const cleanSubdomain = val.toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '');
     setWizardForm(prev => ({
       ...prev,
       professionalName: val,
-      adminName: val
+      adminName: val,
+      subdomain: prev.subdomain || cleanSubdomain
     }));
   };
 
@@ -340,8 +348,8 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
     setWizardSuccess('');
 
     if (wizardStep === 1) {
-      if (!wizardForm.clinicName || !wizardForm.professionalName || !wizardForm.email || !wizardForm.cpfCnpj || !wizardForm.phone) {
-        setWizardError('Por favor, preencha todos os campos obrigatórios da clínica (Nome, Responsável, CRP/CPF, Email e Telefone).');
+      if (!wizardForm.clinicName || !wizardForm.professionalName || !wizardForm.cpfCnpj || !wizardForm.phone) {
+        setWizardError('Por favor, preencha os campos obrigatórios da clínica (Nome, Responsável, CRP/CPF e Telefone).');
         return;
       }
       setWizardStep(2);
@@ -365,18 +373,54 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
 
     if (wizardStep === 3) {
       try {
-        const finalTenantId = wizardForm.subdomain.trim().toLowerCase().replace(/[^a-z0-9]/g, '_');
-        if (!finalTenantId) {
-          setWizardError('O identificador (subdomínio) do tenant não pode ser vazio.');
+        const cleanEmail = wizardForm.email.trim().toLowerCase();
+        const cleanClinic = wizardForm.clinicName.trim();
+
+        // Check Email duplicate (if email is provided)
+        if (cleanEmail) {
+          const dupEmail = tenants.find(t => 
+            (t.ownerEmail && t.ownerEmail.trim().toLowerCase() === cleanEmail) ||
+            ((t as any).email && (t as any).email.trim().toLowerCase() === cleanEmail)
+          );
+          if (dupEmail) {
+            setWizardError(`Já existe um cliente cadastrado com o e-mail '${wizardForm.email.trim()}' (${dupEmail.name}). Não é permitido criar clientes duplicados.`);
+            return;
+          }
+        }
+
+        // Check Name duplicate
+        const dupName = tenants.find(t => 
+          (t.name && t.name.trim().toLowerCase() === cleanClinic.toLowerCase()) ||
+          (t.clinicName && t.clinicName.trim().toLowerCase() === cleanClinic.toLowerCase())
+        );
+        if (dupName) {
+          setWizardError(`Já existe um cliente cadastrado com o nome '${cleanClinic}'. Escolha um nome diferente.`);
           return;
+        }
+
+        let finalTenantId = wizardForm.subdomain.trim().toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/^_+|_+$/g, '');
+        if (!finalTenantId) {
+          const nameClean = (wizardForm.clinicName || wizardForm.professionalName || 'clinica').toLowerCase()
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-z0-9]/g, '_')
+            .replace(/^_+|_+$/g, '');
+          finalTenantId = nameClean || 'clinica_' + Date.now().toString().slice(-4);
         }
 
         // Check if tenant already exists
         const checkRef = doc(db, 'tenants', finalTenantId);
         const checkSnap = await getDoc(checkRef);
-        if (checkSnap.exists()) {
-          setWizardError(`Este subdomínio/identificador '${finalTenantId}' já está em uso por outra clínica.`);
-          return;
+        const existsInState = tenants.some(t => t.id === finalTenantId);
+
+        if (checkSnap.exists() || existsInState || finalTenantId === 'mentecare_platform') {
+          // Auto-disambiguate tenant ID if there is a collision
+          const candidateId = `${finalTenantId}_${Math.floor(100 + Math.random() * 900)}`;
+          const candSnap = await getDoc(doc(db, 'tenants', candidateId));
+          if (!candSnap.exists() && !tenants.some(t => t.id === candidateId)) {
+            finalTenantId = candidateId;
+          } else {
+            finalTenantId = `${finalTenantId}_${Date.now().toString().slice(-4)}`;
+          }
         }
 
         let tempPassword = wizardForm.adminPassword;
@@ -395,7 +439,11 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
           ownerEmail: wizardForm.email.trim().toLowerCase(),
           status: (wizardForm.status === 'Ativo' || wizardForm.status === 'Teste') ? 'Ativo' : 'Bloqueado'
         };
-        await setDoc(doc(db, 'tenants', finalTenantId), newTenant);
+        try {
+          await contentService.createTenant(newTenant);
+        } catch (tErr) {
+          console.warn("Notice: createTenant error or fallback:", tErr);
+        }
 
         // Calculate limits & features
         let maxUsers = 1;
@@ -433,7 +481,11 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
           status: wizardForm.status === 'Suspenso' ? 'Suspensa' : 'Ativa',
           tenantId: finalTenantId
         };
-        await setDoc(doc(db, 'licenses', newLicense.id), newLicense);
+        try {
+          await contentService.createLicense(newLicense);
+        } catch (lErr) {
+          console.warn("Notice: createLicense error or fallback:", lErr);
+        }
 
         // 3. Create Admin Doc
         const adminDoc = {
@@ -600,63 +652,34 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
     'Licensing: Validated license lic_main for tenant main. Status: Active.'
   ]);
 
+  const sanitizeNumber = (val: any, fallback: number): number => {
+    if (val === undefined || val === null) return fallback;
+    if (typeof val === 'number') {
+      return isNaN(val) ? fallback : val;
+    }
+    if (typeof val === 'object') {
+      if (typeof val.seconds === 'number') {
+        return val.seconds * 1000;
+      }
+      if (typeof val._seconds === 'number') {
+        return val._seconds * 1000;
+      }
+      if (val.toDate && typeof val.toDate === 'function') {
+        try {
+          return val.toDate().getTime();
+        } catch (e) {}
+      }
+    }
+    const num = Number(val);
+    if (!isNaN(num)) return num;
+    const parsedDate = Date.parse(val);
+    if (!isNaN(parsedDate)) return parsedDate;
+    return fallback;
+  };
+
   const loadAllData = async () => {
     try {
       setLoading(true);
-      const tList = await contentService.getTenants();
-      const lList = await contentService.getLicenses();
-
-      const sanitizeNumber = (val: any, fallback: number): number => {
-        if (val === undefined || val === null) return fallback;
-        if (typeof val === 'number') {
-          return isNaN(val) ? fallback : val;
-        }
-        if (typeof val === 'object') {
-          if (typeof val.seconds === 'number') {
-            return val.seconds * 1000;
-          }
-          if (typeof val._seconds === 'number') {
-            return val._seconds * 1000;
-          }
-          if (val.toDate && typeof val.toDate === 'function') {
-            try {
-              return val.toDate().getTime();
-            } catch (e) {}
-          }
-        }
-        const num = Number(val);
-        if (!isNaN(num)) return num;
-        const parsedDate = Date.parse(val);
-        if (!isNaN(parsedDate)) return parsedDate;
-        return fallback;
-      };
-
-      const sanitizedTenants = (tList || []).map((tenant: any) => ({
-        ...tenant,
-        id: tenant.id || '',
-        name: tenant.name || 'Sem Nome',
-        ownerEmail: tenant.ownerEmail || '',
-        subdomain: tenant.subdomain || '',
-        status: tenant.status || 'Ativo',
-      }));
-
-      const sanitizedLicenses = (lList || []).map((lic: any) => {
-        const expiresAt = sanitizeNumber(lic.expiresAt, Date.now() + 30 * 24 * 60 * 60 * 1000);
-        const activatedAt = sanitizeNumber(lic.activatedAt, Date.now());
-        return {
-          ...lic,
-          id: lic.id || 'lic_' + Math.random(),
-          code: lic.code || 'LIC-INVALID',
-          plan: lic.plan || 'Pro',
-          status: lic.status || 'Ativa',
-          tenantId: lic.tenantId || '',
-          expiresAt,
-          activatedAt,
-        };
-      });
-
-      setTenants(sanitizedTenants);
-      setLicenses(sanitizedLicenses);
 
       // Load recent logs from 'audit_logs'
       try {
@@ -740,23 +763,60 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
     setTenantError('');
     setTenantSuccess('');
 
-    if (!newTenantId || !newTenantName || !newTenantEmail) {
-      setTenantError('Preencha os campos obrigatórios.');
+    if (!newTenantId || !newTenantName) {
+      setTenantError('Preencha os campos obrigatórios (ID e Nome).');
       return;
     }
 
     const cleanId = newTenantId.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
-    if (tenants.some(t => t.id === cleanId)) {
-      setTenantError('Este identificador (tenantId) já existe.');
+    const cleanEmail = newTenantEmail.trim().toLowerCase();
+    const cleanName = newTenantName.trim();
+    const cleanSubdomain = newTenantSubdomain.trim().toLowerCase() || cleanId;
+
+    if (!cleanId) {
+      setTenantError('O Identificador do Cliente (tenantId) deve conter caracteres válidos (letras, números ou _).');
+      return;
+    }
+
+    // 1. Check ID / Subdomain duplicate
+    const duplicateId = tenants.find(t => 
+      (t.id && t.id.toLowerCase() === cleanId) || 
+      (t.subdomain && t.subdomain.toLowerCase() === cleanId) ||
+      (t.subdomain && t.subdomain.toLowerCase() === cleanSubdomain)
+    );
+    if (duplicateId) {
+      setTenantError(`Não é possível cadastrar: Já existe um cliente com o ID/Subdomínio '${cleanId}'.`);
+      return;
+    }
+
+    // 2. Check Email duplicate (if email is provided)
+    if (cleanEmail) {
+      const duplicateEmail = tenants.find(t => 
+        (t.ownerEmail && t.ownerEmail.trim().toLowerCase() === cleanEmail) ||
+        ((t as any).email && (t as any).email.trim().toLowerCase() === cleanEmail)
+      );
+      if (duplicateEmail) {
+        setTenantError(`Não é possível cadastrar: Já existe um cliente cadastrado com o e-mail '${cleanEmail}' (${duplicateEmail.name}).`);
+        return;
+      }
+    }
+
+    // 3. Check Name duplicate
+    const duplicateName = tenants.find(t => 
+      (t.name && t.name.trim().toLowerCase() === cleanName.toLowerCase()) ||
+      (t.clinicName && t.clinicName.trim().toLowerCase() === cleanName.toLowerCase())
+    );
+    if (duplicateName) {
+      setTenantError(`Não é possível cadastrar: Já existe um cliente cadastrado com o nome '${cleanName}'.`);
       return;
     }
 
     const newTenant: Tenant = {
       id: cleanId,
-      name: newTenantName.trim(),
-      subdomain: newTenantSubdomain.trim().toLowerCase() || cleanId,
+      name: cleanName,
+      subdomain: cleanSubdomain,
       createdAt: Date.now(),
-      ownerEmail: newTenantEmail.trim(),
+      ownerEmail: cleanEmail,
       status: 'Ativo'
     };
 
@@ -777,14 +837,19 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
       };
       await contentService.createLicense(newLicense);
 
-      setTenantSuccess(`Novo psicólogo '${newTenant.name}' cadastrado e ativado! Licença Pro vinculada.`);
+      setMasterSuccessMessage(`✅ Cliente '${newTenant.name}' cadastrado e salvo com sucesso!`);
+      setTenantSuccess(`✅ Cliente '${newTenant.name}' cadastrado e ativado com sucesso!`);
+
       setNewTenantId('');
       setNewTenantName('');
       setNewTenantEmail('');
       setNewTenantSubdomain('');
+      setIsWizardOpen(false);
+      setActiveTab('clientes');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
       loadAllData();
-    } catch (err) {
-      setTenantError('Falha ao cadastrar cliente no Firestore.');
+    } catch (err: any) {
+      setTenantError(err?.message || 'Falha ao cadastrar cliente no Firestore. Verifique se o cliente já existe.');
     }
   };
 
@@ -868,16 +933,41 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
     }
   };
 
-  const handleDeleteLicense = async (licenseId: string, code: string) => {
-    if (!safeConfirm(`Deseja realmente excluir a licença ${code}?\nEsta ação removerá a licença do banco de dados permanentemente.`)) {
+  const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'tenant' | 'license'; id: string; name: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDeleteLicense = (licenseId: string, code: string) => {
+    setDeleteConfirm({ type: 'license', id: licenseId, name: code });
+  };
+
+  const handleDeleteTenant = (tenantId: string, tenantName: string) => {
+    if (tenantId === 'mentecare_platform' || tenantId === 'main') {
+      safeAlert('A plataforma principal MenteCare não pode ser excluída.');
       return;
     }
+    setDeleteConfirm({ type: 'tenant', id: tenantId, name: tenantName });
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteConfirm) return;
+    const target = { ...deleteConfirm };
+    setDeleting(true);
+    setDeleteConfirm(null);
     try {
-      await deleteDoc(doc(db, 'licenses', licenseId));
-      safeAlert(`Licença ${code} removida com sucesso!`);
-      loadAllData();
+      if (target.type === 'license') {
+        await contentService.deleteLicense(target.id);
+      } else if (target.type === 'tenant') {
+        await removeTenantGlobal(target.id);
+        await contentService.deleteTenant(target.id);
+        await refreshTenants();
+      }
+      await loadAllData();
+      safeAlert(`${target.type === 'tenant' ? 'Empresa/Cliente' : 'Licença'} '${target.name}' excluída com sucesso!`);
     } catch (e: any) {
-      safeAlert('Erro ao excluir licença: ' + e.message);
+      console.error("Erro ao excluir:", e);
+      safeAlert('Erro ao realizar exclusão: ' + (e?.message || e));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -1165,7 +1255,7 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
   };
 
   // MRR calculations
-  const totalClinics = tenants.length || 3;
+  const totalClinics = tenants.length;
   const activeSubs = tenants.filter(t => t.status === 'Ativo').length;
   const estimatedMRR = activeSubs * 189.90; // Average pricing base
 
@@ -1280,6 +1370,20 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
           </div>
 
           {/* TAB PORTIONS */}
+          {masterSuccessMessage && (
+            <div className="mb-4 p-4 bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-2xl flex items-center justify-between shadow-sm">
+              <div className="flex items-center gap-3">
+                <CheckCircle2 size={20} className="text-emerald-600 shrink-0" />
+                <span className="text-xs font-bold">{masterSuccessMessage}</span>
+              </div>
+              <button 
+                onClick={() => setMasterSuccessMessage('')}
+                className="text-xs text-emerald-700 hover:text-emerald-950 font-bold px-2 py-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          )}
           <AnimatePresence mode="wait">
             
             {/* 1. MASTER DASHBOARD */}
@@ -1303,15 +1407,15 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
                       <span className="text-[9px] font-bold font-mono uppercase text-sand-500 tracking-wider">Status dos Clientes (Tenants)</span>
                       <div className="grid grid-cols-3 gap-1 pt-1 text-center">
                         <div className="bg-emerald-50 text-emerald-800 p-1.5 rounded-lg">
-                          <p className="text-xs font-bold font-mono">{tenants.filter(t => t.status === 'Ativo').length || 3}</p>
+                          <p className="text-xs font-bold font-mono">{tenants.filter(t => t.status === 'Ativo').length}</p>
                           <p className="text-[7px] uppercase font-bold tracking-wider opacity-80">Ativos</p>
                         </div>
                         <div className="bg-amber-50 text-amber-800 p-1.5 rounded-lg">
-                          <p className="text-xs font-bold font-mono">0</p>
+                          <p className="text-xs font-bold font-mono">{tenants.filter(t => t.status === 'Bloqueado' || t.status === 'Suspenso' || t.status === 'Cancelado').length}</p>
                           <p className="text-[7px] uppercase font-bold tracking-wider opacity-80">Suspen.</p>
                         </div>
                         <div className="bg-blue-50 text-blue-800 p-1.5 rounded-lg">
-                          <p className="text-xs font-bold font-mono">1</p>
+                          <p className="text-xs font-bold font-mono">{tenants.filter(t => t.status === 'Teste').length}</p>
                           <p className="text-[7px] uppercase font-bold tracking-wider opacity-80">Em Teste</p>
                         </div>
                       </div>
@@ -1586,12 +1690,22 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
                                     onClick={() => toggleTenantStatus(t.id, t.status || 'Ativo')}
                                     className={`px-2 py-1.5 border rounded-lg text-[10px] font-bold cursor-pointer transition-colors ${
                                       t.status === 'Ativo'
-                                        ? 'border-rose-200 text-rose-700 hover:bg-rose-50'
+                                        ? 'border-amber-200 text-amber-700 hover:bg-amber-50'
                                         : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'
                                     }`}
                                   >
                                     {t.status === 'Ativo' ? 'Suspender' : 'Ativar'}
                                   </button>
+                                  {t.id !== 'mentecare_platform' && t.id !== 'main' && (
+                                    <button
+                                      onClick={() => handleDeleteTenant(t.id, t.name)}
+                                      className="px-2 py-1.5 border border-rose-200 text-rose-700 hover:bg-rose-50 rounded-lg text-[10px] font-bold cursor-pointer transition-colors inline-flex items-center gap-1"
+                                      title="Excluir Empresa / Cliente"
+                                    >
+                                      <Trash2 size={10} />
+                                      Excluir
+                                    </button>
+                                  )}
                                 </td>
                               </tr>
                             ))}
@@ -1715,11 +1829,10 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
                             </div>
 
                             <div className="space-y-1">
-                              <label className="text-[10px] font-bold text-sand-700 uppercase">E-mail Principal *</label>
+                              <label className="text-[10px] font-bold text-sand-700 uppercase">E-mail Principal (Opcional)</label>
                               <input
                                 type="email"
-                                required
-                                placeholder="ex: contato@heloisaterapia.com"
+                                placeholder="ex: contato@heloisaterapia.com (opcional)"
                                 value={wizardForm.email}
                                 onChange={(e) => handleEmailChange(e.target.value)}
                                 className="w-full bg-sand-50/50 border border-sand-200 rounded-xl px-3.5 py-2 text-xs focus:ring-1 focus:ring-softblue-500 focus:bg-white focus:outline-none"
@@ -2127,7 +2240,13 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
                         ) : (
                           <button
                             type="button"
-                            onClick={resetWizard}
+                            onClick={() => {
+                              const createdName = wizardCreatedInfo?.tenantObj?.name || 'novo cliente';
+                              setMasterSuccessMessage(`✅ Cliente '${createdName}' cadastrado e salvo com sucesso!`);
+                              resetWizard();
+                              setActiveTab('clientes');
+                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                            }}
                             className="px-5 py-2 bg-sand-900 hover:bg-black text-white font-bold rounded-xl text-xs cursor-pointer transition-colors"
                           >
                             Voltar à Lista de Clientes
@@ -2204,7 +2323,7 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
                         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sand-400" size={14} />
                         <input
                           type="text"
-                          placeholder="Pesquisar por Código ou Tenant ID..."
+                          placeholder="Pesquisar por Nome, Código ou Tenant ID..."
                           value={licSearch}
                           onChange={(e) => setLicSearch(e.target.value)}
                           className="w-full bg-sand-50 border border-sand-200 rounded-xl pl-9 pr-4 py-2 text-xs focus:ring-1 focus:ring-softblue-500 focus:outline-none font-medium"
@@ -2235,63 +2354,115 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
                       <table className="w-full text-left text-xs">
                         <thead className="bg-sand-50 text-sand-700 font-bold border-b border-sand-150">
                           <tr>
-                            <th className="p-3">Código / Key</th>
-                            <th className="p-3">Tenant Vinculado</th>
+                            <th className="p-3">Nome da Clínica</th>
+                            <th className="p-3">Responsável</th>
                             <th className="p-3">Plano</th>
-                            <th className="p-3">Validade</th>
                             <th className="p-3">Status</th>
+                            <th className="p-3">Código da Licença</th>
+                            <th className="p-3">Data de Criação</th>
+                            <th className="p-3">Data de Vencimento</th>
+                            <th className="p-3">Qtd. Pacientes</th>
+                            <th className="p-3">Qtd. Usuários</th>
                             <th className="p-3 text-right">Ações</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-sand-100 font-mono">
-                          {licenses.filter(lic => {
-                            const matchesSearch = lic.code.toLowerCase().includes(licSearch.toLowerCase()) || lic.tenantId.toLowerCase().includes(licSearch.toLowerCase());
-                            const matchesPlan = licPlanFilter === 'all' || lic.plan === licPlanFilter;
-                            const matchesStatus = licStatusFilter === 'all' || (licStatusFilter === 'Ativa' && (lic.status === 'Ativa' || !lic.status)) || (licStatusFilter === 'Suspensa' && lic.status === 'Suspensa');
-                            return matchesSearch && matchesPlan && matchesStatus;
-                          }).length === 0 ? (
-                            <tr>
-                              <td colSpan={6} className="p-8 text-center text-sand-400 font-sans text-xs">
-                                Nenhuma licença encontrada com os filtros selecionados.
-                              </td>
-                            </tr>
-                          ) : (
-                            licenses.filter(lic => {
-                              const matchesSearch = lic.code.toLowerCase().includes(licSearch.toLowerCase()) || lic.tenantId.toLowerCase().includes(licSearch.toLowerCase());
-                              const matchesPlan = licPlanFilter === 'all' || lic.plan === licPlanFilter;
-                              const matchesStatus = licStatusFilter === 'all' || (licStatusFilter === 'Ativa' && (lic.status === 'Ativa' || !lic.status)) || (licStatusFilter === 'Suspensa' && lic.status === 'Suspensa');
+                        <tbody className="divide-y divide-sand-100">
+                          {(() => {
+                            const tenantLicensesList = tenants.map(t => {
+                              const foundLic = licenses.find(l => l.tenantId === t.id);
+                              const lic: License = foundLic || {
+                                id: `lic_${t.id}`,
+                                code: `LIC-${t.id.toUpperCase()}-PRO-${Math.floor(1000 + Math.random() * 9000)}`,
+                                tenantId: t.id,
+                                plan: (t as any).plan || 'Pro',
+                                activatedAt: t.createdAt || Date.now(),
+                                expiresAt: (t.createdAt || Date.now()) + 365 * 24 * 60 * 60 * 1000,
+                                maxUsers: 3,
+                                maxPatients: 150,
+                                features: ['dashboard', 'agenda', 'pacientes', 'financeiro'],
+                                status: ((t.status as string) === 'Inativo' || (t.status as string) === 'Suspenso') ? 'Suspensa' : 'Ativa'
+                              };
+                              return { tenant: t, license: lic };
+                            });
+
+                            const unlinkedLicenses = licenses
+                              .filter(l => !tenants.some(t => t.id === l.tenantId))
+                              .map(l => ({
+                                tenant: { id: l.tenantId || 'unlinked', name: l.tenantId || 'Não vinculado', ownerEmail: '-' } as Tenant,
+                                license: l
+                              }));
+
+                            const combined = [...tenantLicensesList, ...unlinkedLicenses];
+
+                            const filtered = combined.filter(({ tenant, license }) => {
+                              const matchesSearch = 
+                                license.code.toLowerCase().includes(licSearch.toLowerCase()) || 
+                                license.tenantId.toLowerCase().includes(licSearch.toLowerCase()) ||
+                                tenant.name.toLowerCase().includes(licSearch.toLowerCase()) ||
+                                (tenant.ownerEmail && tenant.ownerEmail.toLowerCase().includes(licSearch.toLowerCase()));
+                              const matchesPlan = licPlanFilter === 'all' || license.plan === licPlanFilter;
+                              const matchesStatus = licStatusFilter === 'all' || 
+                                (licStatusFilter === 'Ativa' && (license.status === 'Ativa' || !license.status)) || 
+                                (licStatusFilter === 'Suspensa' && license.status === 'Suspensa');
                               return matchesSearch && matchesPlan && matchesStatus;
-                            }).map((lic) => {
-                              const isSuspended = lic.status === 'Suspensa';
+                            });
+
+                            if (filtered.length === 0) {
                               return (
-                                <tr key={lic.id} className="hover:bg-sand-50/50">
-                                  <td className="p-3 font-bold text-sand-950 select-all">{lic.code}</td>
-                                  <td className="p-3 text-softblue-700 font-bold select-all">{lic.tenantId}</td>
+                                <tr>
+                                  <td colSpan={10} className="p-8 text-center text-sand-400 font-sans text-xs">
+                                    Nenhuma licença/clínica encontrada com os filtros selecionados.
+                                  </td>
+                                </tr>
+                              );
+                            }
+
+                            return filtered.map(({ tenant, license }) => {
+                              const isSuspended = license.status === 'Suspensa';
+                              return (
+                                <tr key={license.id} className="hover:bg-sand-50/50">
+                                  <td className="p-3">
+                                    <div className="font-bold text-sand-950 font-sans">{tenant.name || tenant.id}</div>
+                                    <div className="text-[9px] text-sand-500 font-mono">ID: {tenant.id}</div>
+                                  </td>
+                                  <td className="p-3 font-sans text-sand-700 text-[11px]">
+                                    {tenant.ownerEmail || 'Não informado'}
+                                  </td>
                                   <td className="p-3 font-sans">
                                     <span className={`px-2 py-0.5 rounded text-[9px] font-bold border ${
-                                      lic.plan === 'Premium' ? 'bg-purple-50 border-purple-200 text-purple-700' :
-                                      lic.plan === 'Pro' ? 'bg-softblue-50 border-softblue-200 text-softblue-700' :
+                                      license.plan === 'Premium' ? 'bg-purple-50 border-purple-200 text-purple-700' :
+                                      license.plan === 'Pro' ? 'bg-softblue-50 border-softblue-200 text-softblue-700' :
                                       'bg-sand-100 border-sand-200 text-sand-700'
                                     }`}>
-                                      {lic.plan}
+                                      {license.plan || 'Pro'}
                                     </span>
                                   </td>
-                                  <td className="p-3 text-sand-600 font-sans text-[11px]">
-                                    {new Date(lic.expiresAt).toLocaleDateString('pt-BR')}
-                                  </td>
-                                  <td className="p-3">
-                                    <span className={`px-2 py-0.5 border text-[9px] font-bold rounded-full font-sans ${
+                                  <td className="p-3 font-sans">
+                                    <span className={`px-2 py-0.5 border text-[9px] font-bold rounded-full ${
                                       isSuspended 
                                         ? 'bg-amber-50 border-amber-200 text-amber-800' 
                                         : 'bg-emerald-50 border-emerald-200 text-emerald-800'
                                     }`}>
-                                      {lic.status || 'Ativa'}
+                                      {license.status || 'Ativa'}
                                     </span>
                                   </td>
-                                  <td className="p-3 text-right space-x-1.5 whitespace-nowrap">
+                                  <td className="p-3 font-bold font-mono text-sand-950 select-all text-[11px]">{license.code}</td>
+                                  <td className="p-3 text-sand-600 font-sans text-[11px]">
+                                    {new Date(license.activatedAt || tenant.createdAt || Date.now()).toLocaleDateString('pt-BR')}
+                                  </td>
+                                  <td className="p-3 text-sand-600 font-sans text-[11px]">
+                                    {new Date(license.expiresAt || (Date.now() + 365 * 24 * 3600 * 1000)).toLocaleDateString('pt-BR')}
+                                  </td>
+                                  <td className="p-3 font-sans text-sand-700 text-[11px] font-medium">
+                                    {license.maxPatients || 150} pacientes
+                                  </td>
+                                  <td className="p-3 font-sans text-sand-700 text-[11px] font-medium">
+                                    {license.maxUsers || 3} usuários
+                                  </td>
+                                  <td className="p-3 text-right space-x-1 whitespace-nowrap">
                                     <button
                                       onClick={() => {
-                                        safeCopyToClipboard(lic.code);
+                                        safeCopyToClipboard(license.code);
                                         safeAlert('Código da licença copiado para a área de transferência!');
                                       }}
                                       className="p-1.5 text-sand-500 hover:text-softblue-600 hover:bg-softblue-50 rounded-lg transition-all cursor-pointer inline-flex items-center"
@@ -2302,8 +2473,8 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
 
                                     <button
                                       onClick={() => {
-                                        setSelectedLinkLicense(lic);
-                                        setLinkGenTenantId(lic.tenantId || '');
+                                        setSelectedLinkLicense(license);
+                                        setLinkGenTenantId(license.tenantId || tenant.id);
                                         setIsLinkGenOpen(true);
                                       }}
                                       className="p-1.5 text-sand-500 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-all cursor-pointer inline-flex items-center"
@@ -2314,10 +2485,9 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
 
                                     <button
                                       onClick={() => {
-                                        const tenant = tenants.find(t => t.id === lic.tenantId);
-                                        setSelectedShareLicense(lic);
-                                        setShareClientName(tenant?.name || '');
-                                        setShareClientEmail(tenant?.ownerEmail || '');
+                                        setSelectedShareLicense(license);
+                                        setShareClientName(tenant.name || '');
+                                        setShareClientEmail(tenant.ownerEmail || '');
                                         setShareClientPhone('');
                                         setShareTemplate('welcome');
                                         setShareCustomText('');
@@ -2328,46 +2498,16 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
                                     >
                                       <MessageSquare size={13} />
                                     </button>
-
-                                    <button
-                                      onClick={() => handleToggleLicenseStatus(lic.id, lic.status || 'Ativa')}
-                                      className={`p-1.5 rounded-lg transition-all cursor-pointer inline-flex items-center ${
-                                        (lic.status || 'Ativa') === 'Ativa' 
-                                          ? 'text-amber-600 hover:text-amber-700 hover:bg-amber-50' 
-                                          : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'
-                                      }`}
-                                      title={(lic.status || 'Ativa') === 'Ativa' ? 'Suspender Licença' : 'Ativar Licença'}
-                                    >
-                                      <Activity size={13} />
-                                    </button>
-
-                                    <button
-                                      onClick={() => {
-                                        if (safeConfirm('Estender validade desta licença por +30 dias?')) {
-                                          handleExtendLicenseExpiry(lic.id, 30);
-                                        }
-                                      }}
-                                      className="p-1.5 text-sand-500 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-all cursor-pointer inline-flex items-center"
-                                      title="Estender +30 Dias"
-                                    >
-                                      <Calendar size={13} />
-                                    </button>
-
-                                    <button
-                                      onClick={() => handleDeleteLicense(lic.id, lic.code)}
-                                      className="p-1.5 text-sand-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer inline-flex items-center"
-                                      title="Excluir"
-                                    >
-                                      <Trash2 size={13} />
-                                    </button>
                                   </td>
                                 </tr>
                               );
-                            })
-                          )}
+                            });
+                          })()}
                         </tbody>
                       </table>
                     </div>
+
+
                   </div>
 
                   {/* Generate license */}
@@ -2506,21 +2646,21 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
                   <div className="bg-white border border-sand-200 p-4 rounded-xl shadow-sm">
                     <span className="text-[9px] font-mono font-bold text-sand-400 uppercase">Faturamento Mensal (MRR)</span>
                     <h4 className="font-serif font-black text-sand-900 text-lg mt-1">
-                      R$ {((tenants.filter(t => t.status === 'Ativo').length || 3) * 189.90).toFixed(2)}
+                      R$ {(tenants.filter(t => t.status === 'Ativo').length * 189.90).toFixed(2)}
                     </h4>
                     <p className="text-[9px] text-sand-500 mt-0.5">Com base no plano Pro médio</p>
                   </div>
                   <div className="bg-white border border-sand-200 p-4 rounded-xl shadow-sm">
                     <span className="text-[9px] font-mono font-bold text-sand-400 uppercase">Assinaturas Ativas</span>
                     <h4 className="font-serif font-black text-emerald-700 text-lg mt-1">
-                      {tenants.filter(t => t.status === 'Ativo').length || 2} / {tenants.length || 3}
+                      {tenants.filter(t => t.status === 'Ativo').length} / {tenants.length}
                     </h4>
                     <p className="text-[9px] text-sand-500 mt-0.5">Inquilinos operacionais em produção</p>
                   </div>
                   <div className="bg-white border border-sand-200 p-4 rounded-xl shadow-sm">
                     <span className="text-[9px] font-mono font-bold text-sand-400 uppercase">Licenças Expirando</span>
                     <h4 className="font-serif font-black text-amber-700 text-lg mt-1">
-                      {licenses.filter(l => l.expiresAt < Date.now() + 15 * 24 * 60 * 60 * 1000).length || 1} Chave
+                      {licenses.filter(l => l.expiresAt < Date.now() + 15 * 24 * 60 * 60 * 1000).length} Chaves
                     </h4>
                     <p className="text-[9px] text-sand-500 mt-0.5">Próximos 15 dias de vencimento</p>
                   </div>
@@ -2533,37 +2673,20 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
 
                 {/* Main CRM split container */}
                 {(() => {
-                  // Merge DB data with beautiful fallback placeholders to ensure high fidelity
-                  const mergedCrmList = (() => {
-                    const list = tenants.map(t => {
-                      const lic = licenses.find(l => l.tenantId === t.id);
-                      return {
-                        id: t.id,
-                        name: t.name,
-                        ownerEmail: t.ownerEmail,
-                        subdomain: t.subdomain || t.id,
-                        plan: lic?.plan || 'Pro',
-                        status: t.status || 'Ativo',
-                        expiresAt: lic?.expiresAt || (Date.now() + 30 * 24 * 60 * 60 * 1000),
-                        price: lic?.plan === 'Premium' ? 299.90 : lic?.plan === 'Starter' ? 99.90 : 189.90
-                      };
-                    });
-
-                    const fallbacks = [
-                      { id: 'erica', name: 'Dra. Érica Costa', ownerEmail: 'ericacostapsicologa7@gmail.com', subdomain: 'erica', plan: 'Premium' as SaaSPlanId, status: 'Ativo' as const, expiresAt: Date.now() + 12 * 24 * 60 * 60 * 1000, price: 299.90 },
-                      { id: 'dr_silva', name: 'Dr. Ricardo Silva', ownerEmail: 'ricardo@santos.com.br', subdomain: 'dr_silva', plan: 'Pro' as SaaSPlanId, status: 'Ativo' as const, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000, price: 189.90 },
-                      { id: 'dra_lucia', name: 'Dra. Lucia Alencar', ownerEmail: 'lucia.silva@outlook.com', subdomain: 'dra_lucia', plan: 'Starter' as SaaSPlanId, status: 'Bloqueado' as const, expiresAt: Date.now() - 2 * 24 * 60 * 60 * 1000, price: 99.90 }
-                    ];
-
-                    const result = [...list];
-                    fallbacks.forEach(f => {
-                      if (!result.some(r => r.id === f.id)) {
-                        result.push(f);
-                      }
-                    });
-
-                    return result;
-                  })();
+                  // Direct mapping from single source of truth Firestore collection
+                  const mergedCrmList = tenants.map(t => {
+                    const lic = licenses.find(l => l.tenantId === t.id);
+                    return {
+                      id: t.id,
+                      name: t.name,
+                      ownerEmail: t.ownerEmail,
+                      subdomain: t.subdomain || t.id,
+                      plan: lic?.plan || t.plan || 'Pro',
+                      status: t.status || 'Ativo',
+                      expiresAt: lic?.expiresAt || (Date.now() + 30 * 24 * 60 * 60 * 1000),
+                      price: lic?.plan === 'Premium' ? 299.90 : lic?.plan === 'Starter' ? 99.90 : 189.90
+                    };
+                  });
 
                   // Apply search and filter criteria
                   const filteredCrmList = mergedCrmList.filter(item => {
@@ -2771,6 +2894,18 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
                                   <Trash2 size={11} className="shrink-0" />
                                   Cancelar
                                 </button>
+
+                                {/* EXCLUIR DEFINITIVO */}
+                                {selectedItem.id !== 'mentecare_platform' && selectedItem.id !== 'main' && (
+                                  <button
+                                    onClick={() => handleDeleteTenant(selectedItem.id, selectedItem.name)}
+                                    className="px-3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-[11px] cursor-pointer flex items-center justify-center gap-1.5 shadow-sm transition-colors"
+                                    title="Excluir permanentemente esta empresa/cliente"
+                                  >
+                                    <Trash2 size={11} className="shrink-0" />
+                                    Excluir Empresa
+                                  </button>
+                                )}
 
                                 {/* EDITAR */}
                                 <button
@@ -3769,10 +3904,9 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
                           </div>
 
                           <div className="space-y-1">
-                            <label className="text-[10px] font-bold text-sand-700 uppercase">E-mail do Responsável</label>
+                            <label className="text-[10px] font-bold text-sand-700 uppercase">E-mail do Responsável (Opcional)</label>
                             <input
                               type="email"
-                              required
                               value={editForm.ownerEmail}
                               onChange={(e) => setEditForm({ ...editForm, ownerEmail: e.target.value })}
                               className="w-full bg-sand-50 border border-sand-200 rounded-xl px-3 py-2 text-xs focus:ring-1 focus:ring-softblue-500 focus:outline-none font-mono"
@@ -4578,12 +4712,24 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
                           <strong className="text-sand-900 text-sm block">{t.name}</strong>
                           <span className="font-mono text-sand-500 text-[10px]">tenantId: {t.id}</span>
                         </div>
-                        <button
-                          onClick={() => onEnterTenant(t)}
-                          className="px-3 py-1.5 bg-softblue-500 hover:bg-softblue-600 text-white font-bold rounded-lg cursor-pointer text-xs"
-                        >
-                          Simular Acesso
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => onEnterTenant(t)}
+                            className="px-3 py-1.5 bg-softblue-500 hover:bg-softblue-600 text-white font-bold rounded-lg cursor-pointer text-xs"
+                          >
+                            Simular Acesso
+                          </button>
+                          {t.id !== 'mentecare_platform' && t.id !== 'main' && (
+                            <button
+                              onClick={() => handleDeleteTenant(t.id, t.name)}
+                              className="px-2.5 py-1.5 bg-white border border-rose-200 hover:bg-rose-50 text-rose-700 font-bold rounded-lg cursor-pointer text-xs flex items-center gap-1 transition-colors"
+                              title="Excluir Cliente / Tenant"
+                            >
+                              <Trash2 size={12} />
+                              Excluir
+                            </button>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -4931,6 +5077,62 @@ export default function MasterPanel({ user, logout, navigate, onEnterTenant }: M
           MenteCare Enterprise v1.4.1-stable © {new Date().getFullYear()} - Todos os direitos reservados.
         </footer>
       </main>
+
+      {/* Custom Deletion Confirmation Modal */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-sand-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full border border-sand-200 shadow-2xl space-y-5"
+          >
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="p-3 bg-rose-50 border border-rose-100 rounded-2xl">
+                <Trash2 size={24} />
+              </div>
+              <div>
+                <h3 className="font-serif font-bold text-sand-950 text-base">
+                  {deleteConfirm.type === 'tenant' ? 'Excluir Empresa / Cliente' : 'Excluir Licença'}
+                </h3>
+                <p className="text-[11px] text-sand-500">Esta ação é irreversível.</p>
+              </div>
+            </div>
+
+            <div className="p-4 bg-sand-50 border border-sand-200 rounded-2xl text-xs space-y-2">
+              <p className="text-sand-800">
+                Tem certeza de que deseja excluir {deleteConfirm.type === 'tenant' ? 'a empresa/cliente' : 'a licença'}:
+              </p>
+              <p className="font-bold text-sand-950 font-mono text-sm bg-white p-2 rounded-xl border border-sand-200">
+                {deleteConfirm.name}
+              </p>
+              {deleteConfirm.type === 'tenant' && (
+                <p className="text-[10px] text-rose-600 font-semibold">
+                  ⚠️ A empresa e todas as suas licenças e dados vinculados serão permanentemente excluídos.
+                </p>
+              )}
+            </div>
+
+            <div className="flex gap-3 justify-end pt-2">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                disabled={deleting}
+                className="px-4 py-2 border border-sand-300 hover:bg-sand-50 text-sand-700 font-bold rounded-xl text-xs cursor-pointer transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmDelete}
+                disabled={deleting}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs cursor-pointer shadow-md flex items-center gap-2 transition-all disabled:opacity-50"
+              >
+                {deleting ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                <span>{deleting ? 'Excluindo...' : 'Confirmar Exclusão'}</span>
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }

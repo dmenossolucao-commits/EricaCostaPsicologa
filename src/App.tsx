@@ -86,10 +86,23 @@ export default function App() {
     }
   }, [user, permissions, currentPath, isAdminRoute]);
 
+  // Mobile loading timeout guard to prevent page loading freeze
+  const [forceLoaded, setForceLoaded] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (loading || (user && !permissions)) {
+        console.warn("Loading timeout hit on mobile client. Force continuing app render.");
+        setForceLoaded(true);
+      }
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, [loading, user, permissions]);
+
   // Elegant loading screen during auth/permissions initialization
-  if (loading || (user && !permissions)) {
+  if ((loading || (user && !permissions)) && !forceLoaded) {
     return (
-      <div className="min-h-screen bg-sand-50 flex flex-col items-center justify-center text-sand-950 font-sans">
+      <div className="min-h-screen bg-sand-50 flex flex-col items-center justify-center p-4 text-sand-950 font-sans">
         <div className="relative flex items-center justify-center mb-6">
           <div className="absolute w-20 h-20 rounded-full border-2 border-softblue-500/10 animate-pulse" />
           <div className="absolute w-14 h-14 rounded-full border-t-2 border-b-2 border-softblue-500 animate-spin" />
@@ -97,9 +110,15 @@ export default function App() {
             MC
           </div>
         </div>
-        <div className="flex flex-col items-center space-y-1">
+        <div className="flex flex-col items-center space-y-2 text-center">
           <span className="text-sm font-serif font-bold tracking-wider text-sand-900 uppercase">MenteCare Enterprise</span>
-          <span className="text-[10px] font-mono tracking-widest text-sand-600 uppercase">Carregando permissões de acesso...</span>
+          <span className="text-[10px] font-mono tracking-widest text-sand-600 uppercase">Inicializando MenteCare no celular...</span>
+          <button
+            onClick={() => setForceLoaded(true)}
+            className="mt-4 px-4 py-2 bg-softblue-600 hover:bg-softblue-700 text-white font-bold text-xs rounded-xl shadow cursor-pointer transition-all active:scale-95"
+          >
+            Abrir Plataforma
+          </button>
         </div>
       </div>
     );

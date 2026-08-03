@@ -2,22 +2,24 @@ import React, { useState, useEffect } from 'react';
 import { 
   Building2, Key, Smartphone, Monitor, ShieldAlert, CheckCircle2, 
   HelpCircle, RefreshCw, Plus, ArrowRight, UserPlus, FileText, 
-  Layers, Database, Smartphone as PhoneIcon, Chrome, ExternalLink, Download, Check
+  Layers, Database, Smartphone as PhoneIcon, Chrome, ExternalLink, Download, Check, Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { contentService } from '../../services/contentService';
 import { Tenant, License } from '../../types';
+import { useTenant } from '../../context/TenantContext';
 
 interface MultiempresaTabProps {
   onTenantSwitch?: () => void;
 }
 
 export default function MultiempresaTab({ onTenantSwitch }: MultiempresaTabProps) {
-  const [tenants, setTenants] = useState<Tenant[]>([]);
-  const [licenses, setLicenses] = useState<License[]>([]);
+  const { tenants, licenses, deleteTenant: removeTenantGlobal } = useTenant();
   const [activeTenantId, setActiveTenantId] = useState<string>('mentecare_platform');
+  const [deleteTenantConfirm, setDeleteTenantConfirm] = useState<{ id: string; name: string } | null>(null);
+  const [deletingTenant, setDeletingTenant] = useState(false);
   
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncSuccess, setSyncSuccess] = useState(false);
   
@@ -28,32 +30,33 @@ export default function MultiempresaTab({ onTenantSwitch }: MultiempresaTabProps
   const [newTenantSubdomain, setNewTenantSubdomain] = useState('');
   const [tenantError, setTenantError] = useState('');
   const [tenantSuccess, setTenantSuccess] = useState('');
+  const [createdClientInfo, setCreatedClientInfo] = useState<{
+    id: string;
+    name: string;
+    email: string;
+    subdomain: string;
+    licenseCode: string;
+  } | null>(null);
 
   // Activate License Key Form State
   const [licenseCode, setLicenseCode] = useState('');
   const [licenseError, setLicenseError] = useState('');
   const [licenseSuccess, setLicenseSuccess] = useState('');
 
-  const loadData = async () => {
-    try {
-      setLoading(true);
-      const tList = await contentService.getTenants();
-      const lList = await contentService.getLicenses();
-      setTenants(tList || []);
-      setLicenses(lList || []);
-      
-      const current = localStorage.getItem('active_tenant_id') || 'mentecare_platform';
-      setActiveTenantId(current);
-    } catch (err) {
-      console.error('Error loading tenants/licenses:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    loadData();
+    const current = localStorage.getItem('active_tenant_id') || 'mentecare_platform';
+    setActiveTenantId(current);
   }, []);
+
+  const handleResetNewClientForm = () => {
+    setCreatedClientInfo(null);
+    setTenantSuccess('');
+    setTenantError('');
+    setNewTenantId('');
+    setNewTenantName('');
+    setNewTenantEmail('');
+    setNewTenantSubdomain('');
+  };
 
   const handleSwitchTenant = (tenantId: string) => {
     localStorage.setItem('active_tenant_id', tenantId);
@@ -62,8 +65,26 @@ export default function MultiempresaTab({ onTenantSwitch }: MultiempresaTabProps
     // Notify parent or trigger full refresh to reload all context-sensitive data
     if (onTenantSwitch) {
       onTenantSwitch();
-    } else {
-      loadData();
+    }
+  };
+
+  const confirmDeleteTenant = async () => {
+    if (!deleteTenantConfirm) return;
+    const target = { ...deleteTenantConfirm };
+    setDeletingTenant(true);
+    setDeleteTenantConfirm(null);
+    try {
+      await removeTenantGlobal(target.id);
+      await contentService.deleteTenant(target.id);
+      if (activeTenantId === target.id) {
+        handleSwitchTenant('mentecare_platform');
+      } else if (onTenantSwitch) {
+        onTenantSwitch();
+      }
+    } catch (err: any) {
+      console.error("Erro ao excluir cliente:", err);
+    } finally {
+      setDeletingTenant(false);
     }
   };
 
@@ -72,23 +93,60 @@ export default function MultiempresaTab({ onTenantSwitch }: MultiempresaTabProps
     setTenantError('');
     setTenantSuccess('');
 
-    if (!newTenantId || !newTenantName || !newTenantEmail) {
-      setTenantError('Preencha os campos obrigatórios.');
+    if (!newTenantId || !newTenantName) {
+      setTenantError('Preencha os campos obrigatórios (ID e Nome).');
       return;
     }
 
     const cleanId = newTenantId.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
-    if (tenants.some(t => t.id === cleanId)) {
-      setTenantError('Este identificador (tenantId) já existe.');
+    const cleanEmail = newTenantEmail.trim().toLowerCase();
+    const cleanName = newTenantName.trim();
+    const cleanSubdomain = newTenantSubdomain.trim().toLowerCase() || cleanId;
+
+    if (!cleanId) {
+      setTenantError('O Identificador do Cliente (tenantId) deve conter caracteres válidos (letras, números ou _).');
+      return;
+    }
+
+    // 1. Check ID / Subdomain duplicate
+    const duplicateId = tenants.find(t => 
+      (t.id && t.id.toLowerCase() === cleanId) || 
+      (t.subdomain && t.subdomain.toLowerCase() === cleanId) ||
+      (t.subdomain && t.subdomain.toLowerCase() === cleanSubdomain)
+    );
+    if (duplicateId) {
+      setTenantError(`Não foi possível criar: Já existe um cliente cadastrado com o ID/Subdomínio '${cleanId}'.`);
+      return;
+    }
+
+    // 2. Check Email duplicate (if email is provided)
+    if (cleanEmail) {
+      const duplicateEmail = tenants.find(t => 
+        (t.ownerEmail && t.ownerEmail.trim().toLowerCase() === cleanEmail) ||
+        ((t as any).email && (t as any).email.trim().toLowerCase() === cleanEmail)
+      );
+      if (duplicateEmail) {
+        setTenantError(`Não foi possível criar: Já existe um cliente cadastrado com o e-mail '${cleanEmail}' (${duplicateEmail.name}).`);
+        return;
+      }
+    }
+
+    // 3. Check Name duplicate
+    const duplicateName = tenants.find(t => 
+      (t.name && t.name.trim().toLowerCase() === cleanName.toLowerCase()) ||
+      (t.clinicName && t.clinicName.trim().toLowerCase() === cleanName.toLowerCase())
+    );
+    if (duplicateName) {
+      setTenantError(`Não foi possível criar: Já existe um cliente cadastrado com o nome '${cleanName}'.`);
       return;
     }
 
     const newTenant: Tenant = {
       id: cleanId,
-      name: newTenantName.trim(),
-      subdomain: newTenantSubdomain.trim().toLowerCase() || cleanId,
+      name: cleanName,
+      subdomain: cleanSubdomain,
       createdAt: Date.now(),
-      ownerEmail: newTenantEmail.trim(),
+      ownerEmail: cleanEmail,
       status: 'Ativo'
     };
 
@@ -110,19 +168,22 @@ export default function MultiempresaTab({ onTenantSwitch }: MultiempresaTabProps
       };
       await contentService.createLicense(newLicense);
 
-      setTenantSuccess(`Tenant '${newTenant.name}' criado com sucesso! Uma licença Pro foi vinculada.`);
+      setTenantSuccess(`✅ Cliente '${newTenant.name}' salvo com sucesso! Licença ativada.`);
+      setCreatedClientInfo({
+        id: cleanId,
+        name: newTenant.name,
+        email: newTenant.ownerEmail || cleanEmail || 'Não informado',
+        subdomain: newTenant.subdomain || cleanId,
+        licenseCode: newLicense.code
+      });
+
       setNewTenantId('');
       setNewTenantName('');
       setNewTenantEmail('');
       setNewTenantSubdomain('');
-      
-      // Reload lists
-      const tList = await contentService.getTenants();
-      const lList = await contentService.getLicenses();
-      setTenants(tList);
-      setLicenses(lList);
-    } catch (err) {
-      setTenantError('Falha ao criar tenant no banco de dados.');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (err: any) {
+      setTenantError(err?.message || 'Falha ao criar tenant no banco de dados. Verifique se o cliente já existe.');
     }
   };
 
@@ -140,10 +201,6 @@ export default function MultiempresaTab({ onTenantSwitch }: MultiempresaTabProps
       const updatedLic = await contentService.activateLicense(licenseCode.trim(), activeTenantId);
       setLicenseSuccess(`Licença ativa com sucesso! Plano: ${updatedLic.plan}`);
       setLicenseCode('');
-      
-      // Reload licenses
-      const lList = await contentService.getLicenses();
-      setLicenses(lList);
     } catch (err) {
       setLicenseError('Falha ao ativar a licença.');
     }
@@ -262,18 +319,29 @@ export default function MultiempresaTab({ onTenantSwitch }: MultiempresaTabProps
                         <span className="text-softblue-600 font-bold">{t.subdomain}</span>.saas.com
                       </td>
                       <td className="p-3">
-                        {t.id === activeTenantId ? (
-                          <span className="text-[10px] bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold px-2 py-0.5 rounded-full flex items-center gap-1 w-fit">
-                            <CheckCircle2 size={10} /> Ativo
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => handleSwitchTenant(t.id)}
-                            className="px-2 py-1 bg-white hover:bg-sand-100 border border-sand-200 text-sand-700 font-bold rounded text-[10px] cursor-pointer"
-                          >
-                            Selecionar
-                          </button>
-                        )}
+                        <div className="flex items-center gap-2">
+                          {t.id === activeTenantId ? (
+                            <span className="text-[10px] bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold px-2 py-0.5 rounded-full flex items-center gap-1 w-fit">
+                              <CheckCircle2 size={10} /> Ativo
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => handleSwitchTenant(t.id)}
+                              className="px-2 py-1 bg-white hover:bg-sand-100 border border-sand-200 text-sand-700 font-bold rounded text-[10px] cursor-pointer"
+                            >
+                              Selecionar
+                            </button>
+                          )}
+                          {t.id !== 'mentecare_platform' && t.id !== 'main' && (
+                            <button
+                              onClick={() => setDeleteTenantConfirm({ id: t.id, name: t.name })}
+                              className="p-1 hover:bg-rose-50 text-sand-400 hover:text-rose-600 rounded transition-colors cursor-pointer border border-transparent hover:border-rose-200"
+                              title="Excluir Empresa / Tenant"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -317,11 +385,10 @@ export default function MultiempresaTab({ onTenantSwitch }: MultiempresaTabProps
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-sand-700 uppercase">Email Administrativo</label>
+                  <label className="text-[10px] font-bold text-sand-700 uppercase">Email Administrativo (Opcional)</label>
                   <input
                     type="email"
-                    required
-                    placeholder="ex: ricardo@gmail.com"
+                    placeholder="ex: ricardo@gmail.com (opcional)"
                     value={newTenantEmail}
                     onChange={(e) => setNewTenantEmail(e.target.value)}
                     className="w-full bg-sand-50 border border-sand-200 rounded-xl px-3 py-2 text-xs focus:ring-1 focus:ring-softblue-500 focus:outline-none"
@@ -577,6 +644,116 @@ export default function MultiempresaTab({ onTenantSwitch }: MultiempresaTabProps
 
         </div>
       </div>
+
+      {/* Confirmation Modal when Client is Created */}
+      {createdClientInfo && (
+        <div className="fixed inset-0 bg-sand-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full border border-emerald-200 shadow-2xl space-y-5"
+          >
+            <div className="flex items-center gap-3 text-emerald-600">
+              <div className="p-3 bg-emerald-50 border border-emerald-100 rounded-2xl">
+                <CheckCircle2 size={28} className="text-emerald-600" />
+              </div>
+              <div>
+                <h3 className="font-serif font-bold text-sand-950 text-lg">Cliente Criado com Sucesso!</h3>
+                <p className="text-xs text-sand-500">Novo cliente/tenant registrado no MenteCare</p>
+              </div>
+            </div>
+
+            <div className="p-4 bg-emerald-50/50 border border-emerald-100 rounded-2xl text-xs space-y-3">
+              <div>
+                <span className="text-sand-500 text-[10px] uppercase tracking-wider font-semibold block">Nome / Clínica</span>
+                <p className="font-bold text-sand-950 text-sm">{createdClientInfo.name}</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <span className="text-sand-500 text-[10px] uppercase tracking-wider font-semibold block">Identificador</span>
+                  <p className="font-mono font-bold text-emerald-800 text-xs bg-white px-2 py-1 rounded-lg border border-emerald-200">{createdClientInfo.id}</p>
+                </div>
+                <div>
+                  <span className="text-sand-500 text-[10px] uppercase tracking-wider font-semibold block">Subdomínio</span>
+                  <p className="font-mono font-bold text-emerald-800 text-xs bg-white px-2 py-1 rounded-lg border border-emerald-200">{createdClientInfo.subdomain}</p>
+                </div>
+              </div>
+
+              <div>
+                <span className="text-sand-500 text-[10px] uppercase tracking-wider font-semibold block">E-mail Proprietário</span>
+                <p className="font-medium text-sand-800 text-xs">{createdClientInfo.email}</p>
+              </div>
+
+              <div>
+                <span className="text-sand-500 text-[10px] uppercase tracking-wider font-semibold block">Licença Pro Gerada</span>
+                <p className="font-mono font-bold text-emerald-900 text-xs bg-emerald-100/80 px-2 py-1.5 rounded-lg border border-emerald-300">
+                  {createdClientInfo.licenseCode}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2 pt-1">
+              <button
+                onClick={handleResetNewClientForm}
+                className="w-full py-3 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-2xl text-xs cursor-pointer shadow-md transition-all flex items-center justify-center gap-2"
+              >
+                <Check size={16} />
+                <span>Voltar / Cadastrar Novo Cliente</span>
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Delete Tenant Confirmation Modal */}
+      {deleteTenantConfirm && (
+        <div className="fixed inset-0 bg-sand-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full border border-sand-200 shadow-2xl space-y-5"
+          >
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="p-3 bg-rose-50 border border-rose-100 rounded-2xl">
+                <Trash2 size={24} />
+              </div>
+              <div>
+                <h3 className="font-serif font-bold text-sand-950 text-base">Excluir Cliente / Empresa</h3>
+                <p className="text-[11px] text-sand-500">Esta ação apaga o tenant do banco de dados.</p>
+              </div>
+            </div>
+
+            <div className="p-4 bg-sand-50 border border-sand-200 rounded-2xl text-xs space-y-2">
+              <p className="text-sand-800">Deseja realmente remover o cliente:</p>
+              <p className="font-bold text-sand-950 font-mono text-sm bg-white p-2 rounded-xl border border-sand-200">
+                {deleteTenantConfirm.name} ({deleteTenantConfirm.id})
+              </p>
+              <p className="text-[10px] text-rose-600 font-semibold">
+                ⚠️ O cliente e todas as suas licenças associadas serão permanentemente excluídos.
+              </p>
+            </div>
+
+            <div className="flex gap-3 justify-end pt-2">
+              <button
+                onClick={() => setDeleteTenantConfirm(null)}
+                disabled={deletingTenant}
+                className="px-4 py-2 border border-sand-300 hover:bg-sand-50 text-sand-700 font-bold rounded-xl text-xs cursor-pointer transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmDeleteTenant}
+                disabled={deletingTenant}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs cursor-pointer shadow-md flex items-center gap-2 transition-all disabled:opacity-50"
+              >
+                {deletingTenant ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                <span>{deletingTenant ? 'Excluindo...' : 'Confirmar Exclusão'}</span>
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }

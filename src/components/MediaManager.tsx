@@ -26,7 +26,7 @@ interface BlogImageItem {
 }
 
 export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaManagerProps) {
-  const { siteContent, updateSiteContent } = useSiteContent();
+  const { siteContent, updateSiteContent, publishContent } = useSiteContent();
 
   // Individual states for each media category to prevent full-screen or unrelated re-renders
   const [selectedFiles, setSelectedFiles] = useState<Record<string, File>>({});
@@ -44,6 +44,7 @@ export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaM
   const [fullscreenImage, setFullscreenImage] = useState<{ url: string; title: string } | null>(null);
 
   // Persistence of upload dates for system images
+  const [customUrls, setCustomUrls] = useState<Record<string, string>>({});
   const [uploadDates, setUploadDates] = useState<Record<string, string>>(() => {
     try {
       const saved = localStorage.getItem('mente_care_upload_dates');
@@ -207,7 +208,11 @@ export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaM
         await loadBlogImages();
       }
 
-      setUploadStatus(prev => ({ ...prev, [key]: 'Sucesso! Salvo com sucesso.' }));
+      if (key !== 'admin' && key !== 'blog_assets') {
+        await publishContent(`Upload e publicação de foto (${key}) no site`);
+      }
+
+      setUploadStatus(prev => ({ ...prev, [key]: 'Sucesso! Foto postada no site com sucesso.' }));
       setUploadProgress(prev => ({ ...prev, [key]: 100 }));
 
       // Update stored upload date
@@ -226,6 +231,87 @@ export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaM
     } catch (err: any) {
       console.error(err);
       setUploadStatus(prev => ({ ...prev, [key]: `Erro: ${err.message || 'Falha no envio.'}` }));
+    } finally {
+      setUploadLoading(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
+  const handleSaveCustomUrl = async (key: 'hero' | 'about' | 'logo' | 'favicon' | 'admin') => {
+    const rawUrl = customUrls[key];
+    if (rawUrl === undefined) return;
+    const url = rawUrl.trim();
+
+    setUploadLoading(prev => ({ ...prev, [key]: true }));
+    setUploadStatus(prev => ({ ...prev, [key]: 'Salvando...' }));
+
+    try {
+      if (key === 'hero') {
+        await updateSiteContent({
+          psychologist_info: {
+            ...siteContent.psychologist_info,
+            heroImageUrl: url
+          }
+        });
+      } else if (key === 'about') {
+        await updateSiteContent({
+          psychologist_info: {
+            ...siteContent.psychologist_info,
+            aboutImageUrl: url
+          }
+        });
+      } else if (key === 'logo') {
+        await updateSiteContent({
+          psychologist_info: {
+            ...siteContent.psychologist_info,
+            logoUrl: url
+          },
+          appearance: {
+            ...siteContent.appearance,
+            logoUrl: url
+          }
+        });
+      } else if (key === 'favicon') {
+        await updateSiteContent({
+          appearance: {
+            ...siteContent.appearance,
+            faviconUrl: url
+          } as any,
+          psychologist_info: {
+            ...siteContent.psychologist_info,
+            faviconUrl: url
+          } as any
+        });
+      } else if (key === 'admin') {
+        if (auth.currentUser) {
+          await updateProfile(auth.currentUser, { photoURL: url });
+        }
+        const adminUidRef = doc(db, 'admins', user.uid);
+        await updateDoc(adminUidRef, { photoURL: url, photoUrl: url });
+        try {
+          const adminEmailRef = doc(db, 'admins', user.email || '');
+          await updateDoc(adminEmailRef, { photoURL: url, photoUrl: url });
+        } catch (e) {}
+        setDbAdminDoc((prev: any) => ({ ...prev, photoURL: url, photoUrl: url }));
+      }
+
+      // Auto-publish so the image goes live instantly on the site
+      if ((key as string) !== 'admin' && (key as string) !== 'blog_assets') {
+        await publishContent(`Publicação de foto (${key}) no site`);
+      }
+
+      setUploadStatus(prev => ({ ...prev, [key]: 'Sucesso! Postado no site com sucesso.' }));
+      const nowStr = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+      setUploadDates(prev => {
+        const next = { ...prev, [key]: nowStr };
+        localStorage.setItem('mente_care_upload_dates', JSON.stringify(next));
+        return next;
+      });
+      setTimeout(() => {
+        setUploadStatus(prev => ({ ...prev, [key]: '' }));
+      }, 3000);
+    } catch (err: any) {
+      console.error("Erro ao salvar URL:", err);
+      setUploadStatus(prev => ({ ...prev, [key]: `Erro: ${err.message || 'Falha ao salvar.'}` }));
     } finally {
       setUploadLoading(prev => ({ ...prev, [key]: false }));
     }
@@ -501,6 +587,30 @@ export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaM
                     </div>
                   )}
 
+                  {/* URL Input & Direct Save */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] font-bold uppercase text-sand-500 font-mono">Link / URL da Imagem</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={customUrls[item.key] !== undefined ? customUrls[item.key] : (item.url || '')}
+                        onChange={(e) => setCustomUrls(prev => ({ ...prev, [item.key]: e.target.value }))}
+                        placeholder="Cole o link da foto aqui..."
+                        className="flex-1 px-3 py-1.5 border border-sand-200 rounded-xl text-xs bg-sand-50/50 focus:outline-none focus:border-softblue-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleSaveCustomUrl(item.key as any)}
+                        disabled={loading}
+                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer transition-all shadow-xs"
+                        title="Postar Foto no Site"
+                      >
+                        <Save size={13} />
+                        <span>Postar Foto</span>
+                      </button>
+                    </div>
+                  </div>
+
                   {hasPreview ? (
                     <div className="flex gap-2">
                       <button
@@ -510,7 +620,7 @@ export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaM
                         className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer"
                       >
                         <Save size={13} />
-                        <span>Salvar</span>
+                        <span>Postar Foto Enviada</span>
                       </button>
                       <button
                         type="button"
@@ -525,7 +635,7 @@ export default function MediaManager({ user, dbAdminDoc, setDbAdminDoc }: MediaM
                     <div className="flex gap-2">
                       <label className="flex-1 py-2.5 bg-softblue-500 hover:bg-softblue-600 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer">
                         <Upload size={13} />
-                        <span>{item.url ? 'Substituir' : 'Selecionar'}</span>
+                        <span>{item.url ? 'Enviar do PC' : 'Selecionar Foto'}</span>
                         <input
                           type="file"
                           accept="image/*"
